@@ -4,6 +4,10 @@ Mission editor for the Windows game *Tank Battle Classic* (Steam). Edits your ow
 installed copy; contains no game content. Unofficial, not affiliated with the
 game's developer or publisher.
 
+![Main window: mission map with a selected tank and its route, layers, spawn table and properties](docs/screenshot-main.png)
+
+![Objects pane: placing scenery objects from other missions](docs/screenshot-objects.png)
+
 ## Start
 
 Run `TankBattleMissionEditor.exe` (or `python editor.py` from source, see Build).
