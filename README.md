@@ -2,7 +2,9 @@
 
 Mission and map editor for the Windows game *Tank Battle Classic* (Steam). Edits your 
 own installed copy. This unofficial application does not contains any game content and 
-is not affiliated with the game's developer or publisher.
+is not affiliated with the game's developer or publisher. Buy the game from 
+https://store.steampowered.com/app/5086560/Tank_Battle_Classic/
+
 
 ![Main window: mission map with a selected tank and its route, layers, spawn table and properties](docs/screenshot-main.png)
 
