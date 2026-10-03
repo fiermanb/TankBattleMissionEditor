@@ -1,8 +1,8 @@
 # Tank Battle Classic Mission Editor
 
-Mission editor for the Windows game *Tank Battle Classic* (Steam). Edits your own
-installed copy; contains no game content. Unofficial, not affiliated with the
-game's developer or publisher.
+Mission and map editor for the Windows game *Tank Battle Classic* (Steam). Edits your 
+own installed copy. This unofficial application does not contains any game content and 
+is not affiliated with the game's developer or publisher.
 
 ![Main window: mission map with a selected tank and its route, layers, spawn table and properties](docs/screenshot-main.png)
 
