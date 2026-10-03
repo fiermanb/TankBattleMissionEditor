@@ -647,8 +647,10 @@ class SceneModel:
             return [self._remap(v, mapping) for v in obj]
         return copy.deepcopy(obj)
 
-    def duplicate(self, go, offset=(DUPLICATE_OFFSET, DUPLICATE_OFFSET)):
-        """Deep-copy a GameObject hierarchy next to the original; returns the new root GO."""
+    def duplicate(self, go, offset=(DUPLICATE_OFFSET, DUPLICATE_OFFSET), mirror=True):
+        """Deep-copy a GameObject hierarchy next to the original; returns the new root GO.
+        mirror: also add the copy to every event list that references the original
+        (right for tanks; not for copied events, routes or waypoints)."""
         root_tr = self.tr_of_go[go]
         old = []
         for trp in self.subtree(root_tr):
@@ -675,7 +677,8 @@ class SceneModel:
 
         old_refs = {go, root_tr} | {c for c in self.comps.get(go, [])}
         self.reindex()
-        self._mirror_event_refs(old_refs, mapping)
+        if mirror:
+            self._mirror_event_refs(old_refs, mapping)
         if offset:
             pos, _, _ = self.world(new_root_tr)
             self.move_to(new_root_tr, pos[0] + offset[0], pos[2] - offset[1])

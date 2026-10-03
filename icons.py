@@ -153,6 +153,19 @@ def draw(name):
         d.rounded_rectangle((10, 42, 54, 52), radius=5, fill=(40, 40, 40, 255))
         for x in (16, 26, 36, 46):
             d.ellipse((x - 3, 44, x + 3, 50), fill=(120, 120, 120, 255))
+    elif name in ("addwp", "addroute", "addevent"):
+        if name == "addwp":
+            d.polygon([(26, 8), (46, 28), (26, 48), (6, 28)], fill=(255, 160, 40, 255), outline=BLACK)
+        elif name == "addroute":
+            d.line([(6, 50), (22, 14), (40, 38), (54, 8)], fill=(255, 160, 40, 255), width=6)
+            for x, y in ((6, 50), (22, 14), (40, 38)):
+                d.polygon([(x, y - 6), (x + 6, y), (x, y + 6), (x - 6, y)], fill=(255, 160, 40, 255), outline=BLACK)
+        else:
+            d.rectangle((6, 4, 46, 52), fill=WHITE, outline=BLACK, width=3)
+            for y in (16, 28, 40):
+                d.line((14, y, 38, y), fill=NAVY, width=3)
+        d.rectangle((40, 42, 62, 50), fill=GREEN)
+        d.rectangle((47, 35, 55, 57), fill=GREEN)
     elif name == "layers":
         for k, col in enumerate(((250, 220, 120, 255), YELLOW, (210, 160, 40, 255))):
             y = 34 - k * 12

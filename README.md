@@ -24,6 +24,8 @@ The editor finds the game in your Steam libraries or asks for its folder
   (allied groups); one tank or many at once.
 - Mission settings (nothing selected): fog, visibility, recon plane.
 - Objects pane: place objects from any mission (double-click or drag).
+- Insert waypoints (W at the cursor), routes and events (from this or another
+  mission); choose an event's trigger and affected tanks in Properties.
 - New scenarios from an existing mission (Scenario menu); they appear on a
   "Custom Missions" page in the game. The briefing screen is updated on save.
 

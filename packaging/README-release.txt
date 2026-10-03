@@ -18,6 +18,8 @@ WHAT IT DOES
 - Tank settings: type, side, AI behaviour, respawns, unit group, follow target.
 - Mission settings (nothing selected): fog, visibility, recon plane.
 - Objects pane: place objects from any mission (double-click or drag).
+- Insert waypoints (W at the cursor), routes and events; choose the tanks
+  that trigger or are affected by an event.
 - New scenarios (Scenario menu); they appear on a "Custom Missions" page.
 
 CONTROLS

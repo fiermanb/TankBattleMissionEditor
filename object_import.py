@@ -31,7 +31,8 @@ import numpy as np
 
 from scene_model import SUFFIX_RE, SceneModel, q_inv, q_mul, q_rotate, q_dict, v_dict
 
-LIBRARY_VERSION = 2
+LIBRARY_VERSION = 3
+EVENTS_PER_TYPE = 4
 # components allowed in stand-alone objects from the asset files (scenery only:
 # no AI, weapons, effects or timers)
 SAFE_SCRIPTS = {"Break_Object_CS", "Break_Object_Tree_CS", "Break_Object_Parts_CS", "NavMeshModifier",
@@ -70,6 +71,7 @@ class ObjectLibrary:
         self.ctx = ctx
         self.path = os.path.join(cache_dir, "object_library.json")
         self.entries = None
+        self.events = None
         self._sources = {}
 
     def source_scenes(self):
@@ -109,16 +111,30 @@ class ObjectLibrary:
         if data.get("version") != LIBRARY_VERSION or data.get("signature") != self.signature():
             return False
         self.entries = data["entries"]
+        self.events = data.get("events", [])
         return True
 
     def build(self, progress=None):
         entries = {}
+        events = []
+        per_type = {}
         scenes = self.source_scenes()
         for n, idx in enumerate(scenes):
             if progress:
                 progress(n, len(scenes), self.ctx.scene_label(idx))
             m = SceneModel(self.ctx, idx, terrain=None)
             event_gos = set(m.event_go.values())
+            for ev in m.events:
+                if ev in m.spawns or not m.active(m.event_go[ev]):
+                    continue
+                d = m.sc.read(ev)
+                t = d["Event_Type"]
+                if per_type.get(t, 0) >= EVENTS_PER_TYPE:
+                    continue
+                per_type[t] = per_type.get(t, 0) + 1
+                go = m.event_go[ev]
+                events.append({"type": t, "name": base_name(m.name(go)), "scene": idx, "go": go,
+                               "message": d.get("Event_Message", "")[:60]})
             roots = {}
             for g in m.foot:
                 if not m.active(g):
@@ -148,9 +164,11 @@ class ObjectLibrary:
                                 "parts": nparts}
         self._add_asset_objects(entries, progress)
         self.entries = sorted(entries.values(), key=lambda e: (e["category"], e["name"].lower()))
+        self.events = sorted(events, key=lambda e: (e["type"], e["scene"]))
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         with open(self.path, "w", encoding="utf-8") as f:
-            json.dump({"version": LIBRARY_VERSION, "signature": self.signature(), "entries": self.entries}, f)
+            json.dump({"version": LIBRARY_VERSION, "signature": self.signature(), "entries": self.entries,
+                       "events": self.events}, f)
         return self.entries
 
     def _add_asset_objects(self, entries, progress=None):
@@ -308,3 +326,31 @@ def import_object(model, library, entry, wx, wz, follow_terrain=True):
     model.reindex()
     model.rename(mapping[go], model._unique_name(entry["name"]))
     return mapping[go], cleared[0]
+
+
+def reconnect_event_refs(model, new_go, library, entry):
+    """After importing an event from another mission: references to objects of
+    that mission were cleared; fill each cleared single reference (message text
+    box, sound, artillery, ...) with the value another event of this mission uses
+    for the same field. Tank lists stay empty. Returns (reconnected, cleared)."""
+    src = library.source(entry)
+    src_ev = src.event_of_go(entry["go"])
+    new_ev = model.event_of_go(new_go)
+    if src_ev is None or new_ev is None:
+        return 0, 0
+    sd, nd = src.sc.read(src_ev), model.edit(new_ev)
+    done = left = 0
+    for k, v in sd.items():
+        if not (isinstance(v, dict) and set(v) == {"m_FileID", "m_PathID"}):
+            continue
+        if v["m_FileID"] != 0 or not v["m_PathID"] or nd[k]["m_PathID"]:
+            continue
+        donor = next((model.sc.read(e)[k] for e in model.events
+                      if e != new_ev and model.sc.read(e).get(k, {}).get("m_PathID")), None)
+        if donor:
+            nd[k] = dict(donor)
+            done += 1
+        else:
+            left += 1
+    model._set(new_ev, nd)
+    return done, left

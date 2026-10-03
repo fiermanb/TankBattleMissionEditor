@@ -27,7 +27,7 @@ import icons
 import settings
 from version import APP_NAME, COPYRIGHT, __version__
 from briefing_sync import sync_mission
-from object_import import ObjectLibrary, base_name, category, import_object
+from object_import import ObjectLibrary, base_name, category, import_object, reconnect_event_refs
 from scenarios import ScenarioManager
 from scene_io import GameContext
 from scene_model import (
@@ -579,6 +579,33 @@ class TextFormDialog(Dialog):
         return src, t, b
 
 
+class TankListDialog(Dialog):
+    """Choose several tanks (Shift / Ctrl + click), current ones preselected."""
+
+    def __init__(self, parent, title, items, chosen):
+        super().__init__(parent, title)
+        tk.Label(self.body, text="Select the tanks (Shift / Ctrl + click for several):", anchor="w").pack(fill="x")
+        box = bordered(self.body, fill="both", expand=True, pady=(4, 4))
+        self.items = items
+        self.lb = tk.Listbox(box, width=60, height=20, bd=0, selectmode="extended", activestyle="none",
+                             exportselection=False)
+        sb = ttk.Scrollbar(box, command=self.lb.yview)
+        self.lb.config(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        self.lb.pack(side="left", fill="both", expand=True)
+        for i, (text, value) in enumerate(items):
+            self.lb.insert("end", text)
+            if value in chosen:
+                self.lb.selection_set(i)
+        row = tk.Frame(self.body)
+        row.pack(fill="x")
+        ttk.Button(row, text="Select all", command=lambda: self.lb.selection_set(0, "end")).pack(side="left")
+        ttk.Button(row, text="Clear", command=lambda: self.lb.selection_clear(0, "end")).pack(side="left", padx=6)
+
+    def collect(self):
+        return [self.items[i][1] for i in self.lb.curselection()]
+
+
 class GameFolderDialog(Dialog):
     """Choose the installed game (Steam) folder."""
 
@@ -668,6 +695,7 @@ class EditorApp:
         self._table_sync = False
         self.clipboard = None
         self.mouse = None
+        self.place = None
         self.scenes, self.custom_titles = [], {}
         self.layers = {key: key not in TOC_DEFAULT_OFF for key, *_ in TOC_LAYERS}
         apply_classic_style(root)
@@ -807,7 +835,10 @@ class EditorApp:
                            ("Clear selection", lambda: self.select(None), "Esc")])
         menu("Insert", [("Object...", self.add_object, "", "addobj"),
                         ("Hostile tank", lambda: self.add_spawn(True), "", "addhost"),
-                        ("Friendly tank", lambda: self.add_spawn(False), "", "addfriend")])
+                        ("Friendly tank", lambda: self.add_spawn(False), "", "addfriend"), None,
+                        ("Waypoint (click on the map)", self.add_waypoint, "W", "addwp"),
+                        ("Route (copy of the selected route)", self.add_route, "", "addroute"),
+                        ("Event...", self.add_event, "", "addevent")])
         menu("Scenario", [("New scenario...", self.new_scenario, "", "newscen"),
                           ("Mission text...", self.edit_mission_text),
                           ("Update briefing screen", self.update_briefing), None,
@@ -826,6 +857,8 @@ class EditorApp:
             "the selection; Shift snaps to the step).\n\n"
             "Always: middle or right drag pans, the mouse wheel zooms.\n"
             "Alt + click selects a single part instead of the whole object.\n\n"
+            "Insert: W adds a waypoint at the cursor to the selected route; Insert > Route copies a route; "
+            "Insert > Event... copies an event from this or another mission.\n\n"
             "Keys: Q / E rotate by the step (Shift: 1 deg), Del delete / restore, Ctrl+D duplicate, Ctrl+Z undo, "
             "Ctrl+S save, P select parent, F zoom to selection, Home full extent, Tab next spawn, "
             "L events list, T terrain follow, Esc clear selection."), parent=self.root)
@@ -985,6 +1018,9 @@ class EditorApp:
         block("Insert", [("addobj", "Add object...", self.add_object),
                          ("addhost", "Add hostile tank", lambda: self.add_spawn(True)),
                          ("addfriend", "Add friendly tank", lambda: self.add_spawn(False)), None,
+                         ("addwp", "Add waypoint: click on the map (W)", self.add_waypoint),
+                         ("addroute", "Add route (copy of the selected route)", self.add_route),
+                         ("addevent", "Add event...", self.add_event), None,
                          ("newscen", "New scenario...", self.new_scenario)])
 
     def build_toc(self, body):
@@ -1830,9 +1866,10 @@ class EditorApp:
         gos = self.movable()
         if not gos:
             if self.selected is not None and self.kind(self.selected) == "pack":
-                self.status("Duplicate a waypoint or a spawn, not a whole pack.", banner=True)
+                self.add_route()
             return
-        new = self.op("Duplicate", lambda: [self.model.duplicate(g) for g in gos])
+        m = self.model
+        new = self.op("Duplicate", lambda: [m.duplicate(g, mirror=self.kind(g) == "spawn") for g in gos])
         if new:
             self.select_many(new)
             self.changed()
@@ -1966,6 +2003,172 @@ class EditorApp:
             msg += (f" {len(failed)} object(s) not found in the saved source mission"
                     " (save the source mission and copy again).")
         self.status(msg, "ok" if new else "warn", banner=bool(skipped or failed))
+
+    # ---- insert: waypoints, routes, events ------------------------------
+
+    def start_place(self, text, fn):
+        """Next left click on the map calls fn(x, z); Esc cancels."""
+        self.place = {"fn": fn}
+        self.canvas.config(cursor="crosshair")
+        self.status(text + " (Esc cancels)", banner=True)
+
+    def target_route(self):
+        """(route transform, waypoint to insert after or None) for the selection."""
+        m, g = self.model, self.selected
+        if m is None or g is None or g not in m.go:
+            return None
+        k, trp = self.kind(g), m.tr_of_go.get(g)
+        if k == "waypoint":
+            return m.waypoints[trp], trp
+        if k == "pack":
+            return trp, None
+        if k == "spawn":
+            p = m.spawn_pack(m.event_of_go(g))
+            return (p, None) if p else None
+        return None
+
+    def add_waypoint(self, at=None):
+        m = self.model
+        if not m:
+            return
+        route = self.target_route()
+        if not route:
+            self.status("Select a route, one of its waypoints, or a tank with a route first.", "warn", banner=True)
+            return
+        if at is None:
+            self.start_place("Click on the map to place the new waypoint.", lambda x, z: self.add_waypoint((x, z)))
+            return
+        pack, after = route
+        kids = [c["m_PathID"] for c in m.tr[pack]["m_Children"] if c["m_PathID"] in m.tr]
+        if not kids:
+            self.status("This route has no waypoint to copy.", "warn", banner=True)
+            return
+        template = after if after in kids else kids[-1]
+
+        def do():
+            ng = m.duplicate(m.go_of_tr[template], offset=None, mirror=False)
+            if not m.active(ng):
+                m.restore(ng)
+            m.move_to(m.tr_of_go[ng], at[0], at[1], self.follow_var.get())
+            return ng
+        new = self.op("Add waypoint", do)
+        if new is not None:
+            self.select(new)
+            kids = [c["m_PathID"] for c in m.tr[pack]["m_Children"]]
+            n = kids.index(m.tr_of_go[new]) + 1 if m.tr_of_go[new] in kids else len(kids)
+            self.status(f"Added waypoint {n} of {m.name(m.go_of_tr[pack])}. Press W over the map for the next one.",
+                        "ok")
+
+    def add_route(self):
+        m = self.model
+        if not m:
+            return
+        route = self.target_route()
+        pack = route[0] if route else (m.packs[0] if m.packs else None)
+        if pack is None:
+            self.status("This mission has no route to copy.", "warn", banner=True)
+            return
+        tx, tz = self.paste_target()
+
+        def do():
+            ng = m.duplicate(m.go_of_tr[pack], offset=None, mirror=False)
+            ntr = m.tr_of_go[ng]
+            pts = [m.world(c["m_PathID"])[0] for c in m.tr[ntr]["m_Children"] if c["m_PathID"] in m.tr]
+            if pts:
+                cx, cz = sum(p[0] for p in pts) / len(pts), sum(p[2] for p in pts) / len(pts)
+                pos = m.world(ntr)[0].copy()
+                pos[0] += tx - cx
+                pos[2] += tz - cz
+                m.set_world_position(ntr, pos)
+            return ng
+        new = self.op("Add route", do)
+        if new is not None:
+            self.select(new)
+            self.status(f"Added route '{m.name(new)}' (copy of {m.name(m.go_of_tr[pack])}). Drag its waypoints into "
+                        "place and assign it to tanks in Properties (Waypoint pack).", "ok", banner=True)
+
+    def add_event(self):
+        m = self.model
+        if not m:
+            return
+        if not self.ensure_library():
+            return
+        items = []
+        for e in m.events:
+            if e in m.spawns:
+                continue
+            d = m.sc.read(e)
+            items.append((f"This mission       {EVENT_TYPES.get(d['Event_Type'], d['Event_Type'])!s:<20} "
+                          f"{m.name(m.event_go[e])}", ("here", m.event_go[e]), "#000080"))
+        for ent in self.library.events or []:
+            if ent["scene"] == m.index:
+                continue
+            label_ = self.ctx.scene_label(ent["scene"])[:18]
+            msg = f"  '{ent['message']}'" if ent.get("message") else ""
+            items.append((f"{label_:<18} {EVENT_TYPES.get(ent['type'], ent['type'])!s:<20} {ent['name']}{msg}",
+                          ("lib", ent)))
+        choice = ListDialog(self.root, "Add event", items, prompt=(
+            "Choose an event to copy. A copy from this mission keeps its triggers and tanks; an event from "
+            "another mission starts without tanks.")).run()
+        if not choice:
+            return
+        where, val = choice
+        if where == "here":
+            new = self.op("Add event", lambda: m.duplicate(val, offset=None, mirror=False))
+            note = ""
+        else:
+            self.busy("Copying the event from another mission...")
+            cx, cz = self.view.cx, self.view.cz
+
+            def do():
+                root, _ = import_object(m, self.library, val, cx, cz, False)
+                return root, reconnect_event_refs(m, root, self.library, val)
+            res = self.op("Add event", do)
+            self.idle()
+            new, note = (res[0], "") if res else (None, "")
+            if res and res[1][1]:
+                note = f" {res[1][1]} reference(s) to the other mission have no counterpart here."
+        if new is not None:
+            self.select(new)
+            self.show_page("right", "props")
+            self.status(f"Added event '{m.name(new)}'. Set its trigger, time and tanks in Properties.{note}",
+                        "ok", banner=True)
+
+    def prop_tanklist(self, title, ev, key, count_key):
+        """Tank list of an event (names) with a button to choose the tanks."""
+        m = self.model
+        d = m.sc.read(ev)
+        self.prop_info(title, self.tank_names(d.get(key) or []))
+        r = self._next()
+        ttk.Button(self.props, text=f"Choose {title.lower()}...",
+                   command=lambda: self.choose_tanks(ev, key, count_key, title)).grid(row=r, column=1, sticky="w",
+                                                                                     pady=(0, 4))
+
+    def choose_tanks(self, ev, key, count_key, title):
+        m = self.model
+        own = m.event_go.get(ev)
+        items = []
+        for e in m.spawns:
+            go = m.event_go[e]
+            if go == own:
+                continue
+            t = m.tank_entry(e)
+            items.append((f"{m.name(go):<24} {self.spawn_side(e):<9} {tank_display(t) if t else ''}",
+                          m.tr_of_go[go]))
+        chosen = {r["m_PathID"] for r in m.sc.read(ev).get(key) or [] if r["m_FileID"] == 0}
+        res = TankListDialog(self.root, title, items, chosen).run()
+        if res is None:
+            return
+        refs = [{"m_FileID": 0, "m_PathID": p} for p in res]
+
+        def do():
+            d = m.edit(ev)
+            d[key] = refs
+            if count_key in d:
+                d[count_key] = max(len(refs), 1) if count_key == "Trigger_Num" else len(refs)
+            m._set(ev, d)
+        self.op(f"Set {title.lower()}", do)
+        self.status(f"{title}: {len(refs)} tank(s).", "ok")
 
     def select_all(self):
         m = self.model
@@ -2174,6 +2377,11 @@ class EditorApp:
     def on_press(self, e):
         self.canvas.focus_set()
         if not self.model:
+            return
+        if self.place:
+            fn, self.place = self.place["fn"], None
+            self.canvas.config(cursor=TOOL_CURSORS[self.tool])
+            fn(*self.view.s2w(e.x, e.y))
             return
         if self.tool == "pan":
             self.on_pan_start(e)
@@ -2403,7 +2611,17 @@ class EditorApp:
         elif k == "o":
             self.choose_scene()
         elif k == "escape":
-            self.select(None)
+            if self.place:
+                self.place = None
+                self.canvas.config(cursor=TOOL_CURSORS[self.tool])
+                self.status("Placement cancelled.")
+            else:
+                self.select(None)
+        elif k == "w":
+            if self.mouse is not None:
+                self.add_waypoint(self.view.s2w(*self.mouse))
+            else:
+                self.add_waypoint()
         elif k in ("plus", "equal", "kp_add"):
             self.zoom_by(1.25)
         elif k in ("minus", "kp_subtract"):
@@ -2656,17 +2874,20 @@ class EditorApp:
             self.prop_ref_combo("Commander", [ev], "Commander", exclude=go)
             self.prop_sep()
             self.field_rows(ev, SPAWN_FIELDS)
+            self.prop_sep()
+            self.prop_tanklist("Trigger tanks", ev, "Trigger_Tanks", "Trigger_Num")
         elif kind == "event":
             ev = m.event_of_go(go)
             d = m.sc.read(ev)
             self.prop_info("Event type", label(EVENT_TYPES, d["Event_Type"]))
-            self.prop_info("Trigger tanks", self.tank_names(d["Trigger_Tanks"]))
             self.field_rows(ev, EVENT_FIELDS)
+            self.prop_tanklist("Trigger tanks", ev, "Trigger_Tanks", "Trigger_Num")
+            if d["Event_Type"] in (2, 3, 6):
+                self.prop_tanklist("Affected tanks", ev, "Target_Tanks", "Target_Num")
             extra = EVENT_TYPE_FIELDS.get(d["Event_Type"])
             if extra:
                 self.prop_sep()
                 if d["Event_Type"] == 2:
-                    self.prop_info("Changes tanks", self.tank_names(d["Target_Tanks"]))
                     self.prop_ref_combo("New: follow target", [ev], "New_Follow_Target")
                     packs = [0] + m.packs
                     pnames = ["(no change)"] + [m.name(m.go_of_tr[p]) for p in m.packs]
@@ -2810,6 +3031,12 @@ class EditorApp:
         self.prop_check("Mission target", targets == {True},
                         lambda v: self.op("Set mission target",
                                           lambda: [m.set_field(e, "Is_Mission_Target", v) for e in evs]))
+        packs = [0] + m.packs
+        pnames = ["(none)"] + [m.name(m.go_of_tr[p]) for p in m.packs]
+        curp = {m.spawn_pack(e) for e in evs}
+        self.prop_combo("Waypoint pack", pnames, packs.index(next(iter(curp))) if len(curp) == 1 and
+                        next(iter(curp)) in packs else -1,
+                        lambda i: self.op("Set waypoint pack", lambda: [m.assign_pack(e, packs[i]) for e in evs]))
         self.prop_ref_combo("Follow target", evs, "Follow_Target", exclude=set(sel))
         dist = {m.sc.read(e)["Follow_Distance"] for e in evs}
         self.prop_entry("Follow distance", f"{next(iter(dist)):g}" if len(dist) == 1 else "",

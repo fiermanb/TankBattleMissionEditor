@@ -85,6 +85,26 @@ class SceneModelTest(unittest.TestCase):
             self.assertEqual(sorted(r["m_PathID"] for r in m.sc.read(e)["Trigger_Tanks"]),
                              sorted(r["m_PathID"] for r in before[e]))
 
+    def test_routes_waypoints_and_event_copies(self):
+        m = SceneModel(self.ctx, SCENE, terrain=None)
+        pack = m.packs[0]
+        kids = [c["m_PathID"] for c in m.tr[pack]["m_Children"]]
+        complete = next(e for e in m.events if m.sc.read(e)["Event_Type"] == 10)
+        refs_before = len(m.sc.read(complete)["Trigger_Tanks"])
+        m.begin("insert")
+        wp = m.duplicate(m.go_of_tr[kids[0]], offset=None, mirror=False)
+        new_pack = m.duplicate(m.go_of_tr[pack], offset=None, mirror=False)
+        ev_copy = m.duplicate(m.event_go[complete], offset=None, mirror=False)
+        m.commit()
+        order = [c["m_PathID"] for c in m.tr[pack]["m_Children"]]
+        self.assertEqual(order.index(m.tr_of_go[wp]), 1, "new waypoint follows the copied one")
+        self.assertIn(m.tr_of_go[new_pack], m.packs)
+        self.assertEqual(len(m.tr[m.tr_of_go[new_pack]]["m_Children"]), len(order))
+        self.assertIn(m.event_of_go(ev_copy), m.events)
+        self.assertEqual(len(m.sc.read(complete)["Trigger_Tanks"]), refs_before, "event copies are not mirrored")
+        m.undo()
+        self.assertEqual([c["m_PathID"] for c in m.tr[pack]["m_Children"]], kids)
+
     def test_edit_save_reload(self):
         m = SceneModel(self.ctx, SCENE)
         hostile = [e for e in m.spawns if m.sc.read(e)["Relationship"] == 1]
