@@ -1,0 +1,14 @@
+# Build environment for the standalone executable (installed by build_exe.py).
+# UnityPy itself is installed separately with --no-deps, without fmod_toolkit.
+numpy==2.3.2
+Pillow==12.2.0
+astc-encoder-py
+attrs
+brotli
+etcpak
+fsspec
+lz4
+texture2ddecoder
+tpk_ar
+archspec
+pyinstaller==6.20.0

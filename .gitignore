@@ -1,0 +1,10 @@
+# local data: settings and backups of game files
+settings.json
+backups/
+# build output
+packaging/.venv/
+packaging/build/
+packaging/dist/
+packaging/release/
+__pycache__/
+*.pyc

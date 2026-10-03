@@ -1,0 +1,5 @@
+UnityPy==1.25.4
+numpy>=1.26
+Pillow>=10
+# only for packaging/generate_layouts.py (after a game update):
+# TypeTreeGeneratorAPI==0.0.10

@@ -1,0 +1,78 @@
+# Copyright (C) 2026 fierman
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# Builds the standalone executable and publishes it as a GitHub release when a
+# version tag (v1.0.0, v1.1.0, ...) is pushed. Can also be run manually from
+# the Actions tab (then the zip is only kept as a workflow artifact).
+#
+# Code signing (SignPath Foundation) is used once it is set up: add the
+# repository secret SIGNPATH_API_TOKEN and the repository variable
+# SIGNPATH_ORGANIZATION_ID, and check the project and signing-policy slugs
+# below against the SignPath project. Without them the release is unsigned.
+
+name: Build and release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      SIGNING: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Build executable
+        run: python packaging/build_exe.py --no-selftest
+
+      - name: Upload unsigned executable
+        id: unsigned
+        if: env.SIGNING == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-exe
+          path: packaging/dist/TankBattleMissionEditor.exe
+
+      - name: Sign with SignPath
+        if: env.SIGNING == 'true'
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: TankBattleMissionEditor
+          signing-policy-slug: release-signing
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed
+
+      - name: Package signed release
+        if: env.SIGNING == 'true'
+        run: python packaging/build_exe.py --package signed/TankBattleMissionEditor.exe
+
+      - name: Keep release zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: packaging/release/*.zip
+
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          note="Windows 10/11, 64-bit. Unzip and run TankBattleMissionEditor.exe; needs an installed copy of Tank Battle Classic."
+          if [ "$SIGNING" != "true" ]; then
+            note="$note The executable is not code-signed yet: Windows SmartScreen may warn on first start (More info > Run anyway)."
+          fi
+          gh release create "$GITHUB_REF_NAME" packaging/release/*.zip --title "$GITHUB_REF_NAME" --notes "$note"
