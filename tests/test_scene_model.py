@@ -151,6 +151,35 @@ class SceneModelTest(unittest.TestCase):
             m.undo()
         self.assertEqual(m.sc.build(), m.sc.raw)
 
+    def test_new_route_waypoint_and_event(self):
+        m = SceneModel(self.ctx, SCENE, terrain=None)
+        m.begin("new")
+        w1 = m.new_route((10.0, 1.0, 20.0))
+        pack = m.waypoints[m.tr_of_go[w1]]
+        w3 = m.new_waypoint(pack, m.tr_of_go[w1], (50.0, 1.0, 20.0))
+        w2 = m.new_waypoint(pack, m.tr_of_go[w1], (30.0, 1.0, 20.0))
+        ev = m.event_of_go(m.duplicate(m.event_go[m.spawns[0]], offset=None, mirror=False))
+        m.reset_event(ev, 1)
+        m.commit()
+        self.check_integrity(m)
+        self.assertIn(pack, m.packs)
+        order = [m.go_of_tr[c["m_PathID"]] for c in m.tr[pack]["m_Children"]]
+        self.assertEqual(order, [w1, w2, w3])
+        self.assertTrue(all(m.active(g) for g in order))
+        self.assertAlmostEqual(float(m.world(m.tr_of_go[w2])[0][0]), 30.0, places=3)
+        d = m.sc.read(ev)
+        self.assertEqual((d["Event_Type"], d["Trigger_Tanks"], d["Event_Message"]), (1, [], "New message"))
+        self.assertNotIn(ev, m.spawns)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, f"level{SCENE}")
+            m.sc.save(out)
+            sc2 = SceneFile(self.ctx, out)
+            for pid in list(m.sc.changed) + list(m.sc.new_objects):
+                self.assertEqual(sc2.read(pid), m.sc.read(pid))
+        m.undo()
+        self.assertEqual(m.sc.build(), m.sc.raw)
+
     def test_clear_to_terrain(self):
         m = SceneModel(self.ctx, SCENE, terrain="heights")
         m.begin("empty")

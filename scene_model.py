@@ -844,6 +844,74 @@ class SceneModel:
         if reindex:
             self.reindex()
 
+    def new_object(self, name, parent_tr, wpos, index=None, active=True):
+        """New empty GameObject with only a Transform, at world position wpos,
+        as child `index` of parent_tr (0 = scene root; None = last child).
+        Built from the type layouts of an existing GameObject and Transform, so
+        it needs no template object of its own. Returns the new GameObject."""
+        plain = [g for g in self.go if self.tr_of_go.get(g) in self.tr and self.tr_of_go[g] not in self.rect]
+        tgo = next((g for g in plain if len(self.comps.get(g, [])) == 1), plain[0])
+        ttr = self.tr_of_go[tgo]
+        g = self._new(tgo, None)
+        t = self._new(ttr, None)
+        gd = copy.deepcopy(self.sc.read(tgo))
+        gd.update({"m_Name": self._unique_name(name) if name in {d["m_Name"] for d in self.go.values()} else name,
+                   "m_IsActive": active,
+                   "m_Component": [{"component": {"m_FileID": 0, "m_PathID": t}}]})
+        td = copy.deepcopy(self.sc.read(ttr))
+        td.update({"m_GameObject": {"m_FileID": 0, "m_PathID": g},
+                   "m_Father": {"m_FileID": 0, "m_PathID": parent_tr},
+                   "m_Children": [],
+                   "m_LocalPosition": v_dict(np.zeros(3)),
+                   "m_LocalRotation": q_dict((0.0, 0.0, 0.0, 1.0)),
+                   "m_LocalScale": v_dict(np.ones(3))})
+        self.sc._cache[g] = gd
+        self.sc._cache[t] = td
+        if parent_tr:
+            pt = self.edit(parent_tr)
+            kids = pt["m_Children"]
+            kids.insert(len(kids) if index is None else index, {"m_FileID": 0, "m_PathID": t})
+            self._set(parent_tr, pt)
+        self.reindex()
+        self.set_world_position(t, np.asarray(wpos, dtype=float))
+        return g
+
+    def new_route(self, wpos):
+        """New route (waypoint pack, inactive like the shipped ones) with one
+        waypoint at wpos. Returns the waypoint's GameObject."""
+        pack = self.new_object(self._unique_name("WayPoint_Pack"), 0, wpos, active=False)
+        return self.new_waypoint(self.tr_of_go[pack], None, wpos)
+
+    def new_waypoint(self, pack_tr, after_tr, wpos):
+        """New waypoint in route pack_tr after waypoint after_tr (None = at the
+        end), at wpos. Returns its GameObject."""
+        kids = [c["m_PathID"] for c in self.tr[pack_tr]["m_Children"]]
+        index = kids.index(after_tr) + 1 if after_tr in kids else None
+        return self.new_object(self._unique_name("WayPoint"), pack_tr, wpos, index=index)
+
+    def reset_event(self, ev, event_type):
+        """Make event `ev` a fresh event of the given type: no tanks, objects,
+        routes or other events referenced, no message, named after its type."""
+        d = self.edit(ev)
+        d["Event_Type"] = event_type
+        for lst, count in REF_LISTS.items():
+            if lst in d:
+                d[lst] = []
+            if count in d:
+                d[count] = 0
+        for f in REF_SINGLES + PACK_FIELDS:
+            if f in d:
+                d[f] = {"m_FileID": 0, "m_PathID": 0}
+        for f in ("Event_Message", "Event_Message_JPN"):
+            if f in d:
+                d[f] = "New message" if event_type == 1 else ""
+        self._set(ev, d)
+        go = self.event_go.get(ev) or d["m_GameObject"]["m_PathID"]
+        base = f"Event ({EVENT_TYPES.get(event_type, 'Event')})"
+        taken = {v["m_Name"] for k, v in self.go.items() if k != go}
+        self.rename(go, self._unique_name(base) if base in taken else base)
+        self.reindex()
+
     def copy_spawn(self, go, relationship):
         """New tank spawn copied from spawn GameObject `go`, which may be deleted:
         the copy is active, has the given side and no references to deleted

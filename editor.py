@@ -902,8 +902,8 @@ class EditorApp:
         menu("Insert", [("Object...", self.add_object, "", "addobj"),
                         ("Hostile tank", lambda: self.add_spawn(True), "", "addhost"),
                         ("Friendly tank", lambda: self.add_spawn(False), "", "addfriend"), None,
-                        ("Waypoint (click on the map)", self.add_waypoint, "W", "addwp"),
-                        ("Route (copy of the selected route)", self.add_route, "", "addroute"),
+                        ("Waypoint", self.add_waypoint, "W", "addwp"),
+                        ("Route", self.add_route, "", "addroute"),
                         ("Event...", self.add_event, "", "addevent")])
         menu("Scenario", [("New scenario...", self.new_scenario, "", "newscen"),
                           ("Mission text...", self.edit_mission_text),
@@ -925,7 +925,8 @@ class EditorApp:
             "the selection; Shift snaps to the step).\n\n"
             "Always: middle or right drag pans, the mouse wheel zooms.\n"
             "Alt + click selects a single part instead of the whole object.\n\n"
-            "Insert: W adds a waypoint at the cursor to the selected route; Insert > Route copies a route; "
+            "Insert: W adds a waypoint at the cursor to the selected route; Insert > Route starts a new route "
+            "(click its waypoints, Esc ends); "
             "Insert > Event... copies an event from this or another mission.\n\n"
             "Tables: double-click a cell (or F2 for the name) to edit it; Enter applies, Esc cancels. "
             "Deleted rows are shown when the Deleted objects layer is on. In the Waypoints table, Insert adds "
@@ -2492,19 +2493,7 @@ class EditorApp:
             self.start_place("Click on the map to place the new waypoint.", lambda x, z: self.add_waypoint((x, z)))
             return
         pack, after = route
-        kids = [c["m_PathID"] for c in m.tr[pack]["m_Children"] if c["m_PathID"] in m.tr]
-        if not kids:
-            self.status("This route has no waypoint to copy.", "warn", banner=True)
-            return
-        template = after if after in kids else kids[-1]
-
-        def do():
-            ng = m.duplicate(m.go_of_tr[template], offset=None, mirror=False)
-            if not m.active(ng):
-                m.restore(ng)
-            m.move_to(m.tr_of_go[ng], at[0], at[1], self.follow_var.get())
-            return ng
-        new = self.op("Add waypoint", do)
+        new = self.op("Add waypoint", m.new_waypoint, pack, after, self.ground_point(*at))
         if new is not None:
             self.select(new)
             kids = [c["m_PathID"] for c in m.tr[pack]["m_Children"]]
@@ -2512,33 +2501,41 @@ class EditorApp:
             self.status(f"Added waypoint {n} of {m.name(m.go_of_tr[pack])}. Press W over the map for the next one.",
                         "ok")
 
-    def add_route(self):
+    def ground_point(self, x, z):
+        g = self.model.ground(x, z)
+        return (x, 0.0 if g is None else g, z)
+
+    def add_route(self, at=None):
+        """New route: each click on the map adds the next waypoint; Esc ends."""
         m = self.model
         if not m:
             return
-        route = self.target_route()
-        pack = route[0] if route else (m.packs[0] if m.packs else None)
-        if pack is None:
-            self.status("This mission has no route to copy.", "warn", banner=True)
+        if at is None:
+            self.start_place("Click the first waypoint of the new route.", lambda x, z: self.add_route((x, z)))
             return
-        tx, tz = self.paste_target()
+        new = self.op("Add route", m.new_route, self.ground_point(*at))
+        if new is None:
+            return
+        self.select(new)
+        pack = m.waypoints[m.tr_of_go[new]]
+        self.continue_route(pack)
 
-        def do():
-            ng = m.duplicate(m.go_of_tr[pack], offset=None, mirror=False)
-            ntr = m.tr_of_go[ng]
-            pts = [m.world(c["m_PathID"])[0] for c in m.tr[ntr]["m_Children"] if c["m_PathID"] in m.tr]
-            if pts:
-                cx, cz = sum(p[0] for p in pts) / len(pts), sum(p[2] for p in pts) / len(pts)
-                pos = m.world(ntr)[0].copy()
-                pos[0] += tx - cx
-                pos[2] += tz - cz
-                m.set_world_position(ntr, pos)
-            return ng
-        new = self.op("Add route", do)
-        if new is not None:
-            self.select(new)
-            self.status(f"Added route '{m.name(new)}' (copy of {m.name(m.go_of_tr[pack])}). Drag its waypoints into "
-                        "place and assign it to tanks in Properties (Waypoint pack).", "ok", banner=True)
+    def continue_route(self, pack):
+        m = self.model
+        n = len(m.tr[pack]["m_Children"])
+        self.status(f"{m.name(m.go_of_tr[pack])}: {n} waypoint(s). Click the next waypoint; Esc ends the route. "
+                    "Assign the route to tanks in Properties (Waypoint pack).", "ok", banner=True)
+
+        def next_point(x, z):
+            if not self.model or pack not in m.tr:
+                return
+            last = m.tr[pack]["m_Children"][-1]["m_PathID"] if m.tr[pack]["m_Children"] else None
+            new = self.op("Add waypoint", m.new_waypoint, pack, last, self.ground_point(x, z))
+            if new is not None:
+                self.select(new)
+                self.continue_route(pack)
+        self.place = {"fn": next_point}
+        self.canvas.config(cursor="crosshair")
 
     def add_event(self):
         m = self.model
@@ -2546,7 +2543,8 @@ class EditorApp:
             return
         if not self.ensure_library():
             return
-        items = []
+        items = [(f"New event          {name}", ("new", t), "#006000")
+                 for t, name in sorted(EVENT_TYPES.items()) if t != 0]
         for e in m.events:
             if e in m.spawns:
                 continue
@@ -2561,12 +2559,17 @@ class EditorApp:
             items.append((f"{label_:<18} {EVENT_TYPES.get(ent['type'], ent['type'])!s:<20} {ent['name']}{msg}",
                           ("lib", ent)))
         choice = ListDialog(self.root, "Add event", items, prompt=(
-            "Choose an event to copy. A copy from this mission keeps its triggers and tanks; an event from "
-            "another mission starts without tanks.")).run()
+            "Choose a new event, or an event to copy. A copy from this mission keeps its triggers and tanks; "
+            "a new event or one from another mission starts without tanks.")).run()
         if not choice:
             return
         where, val = choice
-        if where == "here":
+        if where == "new":
+            self.busy("Creating the event...")
+            new = self.op("Add event", self.create_event, val)
+            self.idle()
+            note = " Choose its trigger tanks before playing: a tank trigger without tanks fires at once."
+        elif where == "here":
             new = self.op("Add event", lambda: m.duplicate(val, offset=None, mirror=False))
             note = ""
         else:
@@ -2586,6 +2589,22 @@ class EditorApp:
             self.show_page("right", "props")
             self.status(f"Added event '{m.name(new)}'. Set its trigger, time and tanks in Properties.{note}",
                         "ok", banner=True)
+
+    def create_event(self, event_type):
+        """New event of the given type, built from an event of that type in the
+        object library (for sensible type-specific values) or else from any event
+        in this mission, with all references and the message cleared."""
+        m = self.model
+        ent = next((e for e in self.library.events or [] if e["type"] == event_type), None)
+        if ent is not None:
+            go, _ = import_object(m, self.library, ent, self.view.cx, self.view.cz, False)
+        else:
+            src = next((e for e in m.events if e not in m.spawns), None) or m.events[0]
+            go = m.duplicate(m.event_go[src], offset=None, mirror=False)
+            if not m.go[go]["m_IsActive"]:
+                m.set_field(go, "m_IsActive", True)
+        m.reset_event(m.event_of_go(go), event_type)
+        return go
 
     def prop_tanklist(self, title, ev, key, count_key):
         """Tank list of an event (names) with a button to choose the tanks."""
