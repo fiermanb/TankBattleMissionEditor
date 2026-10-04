@@ -16,7 +16,10 @@ import argparse
 import math
 import os
 import shutil
+import subprocess
 import sys
+import tempfile
+import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
@@ -677,8 +680,10 @@ class EditorApp:
     def selected(self, go):
         self.sel = [] if go is None else [go]
 
-    def __init__(self, root, game_root, scene):
+    def __init__(self, root, game_root, scene, auto_library=True):
         self.root = root
+        self.auto_library = auto_library
+        self._lib_job = None
         self.view = View()
         self.model = None
         self.ctx = None
@@ -783,6 +788,7 @@ class EditorApp:
             self.idle()
             messagebox.showerror("Game folder", f"The game data could not be loaded:\n{e}", parent=self.root)
             return
+        self.stop_library_build()
         self.ctx = ctx
         self.backup_dir = settings.backup_dir_for(game)
         if settings.migrate_legacy_backups(game, ctx.scene_names):
@@ -805,6 +811,8 @@ class EditorApp:
         self.update_title()
         self.request_render()
         self.idle()
+        if self.auto_library and self.library.entries is None:
+            self.start_library_build(game)
         if update:
             self.report_game_update(update)
         if ctx.verify_layouts:
@@ -1150,8 +1158,12 @@ class EditorApp:
             lib.load()
         if lib is None or lib.entries is None:
             self.obj_place_btn.pack_forget()
-            self.obj_build_btn.pack(side="left")
-            self.obj_hint.config(text="The object library is built once by scanning the original missions.")
+            if self._lib_job is not None:
+                self.obj_build_btn.pack_forget()
+                self.obj_hint.config(text=self.library_progress_text())
+            else:
+                self.obj_build_btn.pack(side="left")
+                self.obj_hint.config(text="The object library is built once by scanning the original missions.")
             return
         self.obj_build_btn.pack_forget()
         self.obj_place_btn.pack(side="left")
@@ -1739,14 +1751,96 @@ class EditorApp:
 
     # ---- objects -----------------------------------------------------
 
+    def start_library_build(self, game):
+        """Build the object library in a separate process (the editor started a
+        second time with --build-library), so it never slows down the window or
+        the open mission; the result is picked up from the library cache file."""
+        self.stop_library_build()
+        fd, progress = tempfile.mkstemp(prefix="tbme-library-", suffix=".txt")
+        os.close(fd)
+        cmd = [sys.executable] + ([] if getattr(sys, "frozen", False) else [os.path.abspath(__file__)])
+        cmd += ["--build-library", game, self.backup_dir, progress]
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
+        try:
+            proc = subprocess.Popen(cmd, creationflags=flags, stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError as e:
+            self.status(f"The object library could not be built in the background: {e}", "warn")
+            return
+        self._lib_job = {"game": game, "proc": proc, "progress_file": progress, "progress": (0, 0, "")}
+        self.refresh_objects()
+        self.root.after(300, self._poll_library)
+
+    def stop_library_build(self):
+        job, self._lib_job = self._lib_job, None
+        if job and job["proc"].poll() is None:
+            job["proc"].terminate()
+
+    def _read_library_progress(self, job):
+        try:
+            with open(job["progress_file"], "r", encoding="utf-8") as f:
+                lines = f.read().splitlines()
+        except OSError:
+            return ""
+        for line in reversed(lines):
+            parts = line.split(" ", 2)
+            if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
+                job["progress"] = (int(parts[0]), int(parts[1]), parts[2] if len(parts) > 2 else "")
+                break
+        return "\n".join(l for l in lines if l.startswith("ERROR"))
+
+    def library_progress_text(self):
+        job = self._lib_job
+        if not job:
+            return ""
+        n, total, _ = job["progress"]
+        return (f"Building the object library in the background ({n + 1} of {total})..." if total
+                else "Preparing the object library in the background...")
+
+    def _poll_library(self):
+        job = self._lib_job
+        if job is None:
+            return
+        self._read_library_progress(job)
+        if job["proc"].poll() is None:
+            if self.library.entries is None:
+                self.obj_hint.config(text=self.library_progress_text())
+            self.root.after(300, self._poll_library)
+            return
+        self._finish_library(job)
+
+    def _finish_library(self, job):
+        if self._lib_job is job:
+            self._lib_job = None
+        error = self._read_library_progress(job)
+        try:
+            os.remove(job["progress_file"])
+        except OSError:
+            pass
+        if not self.ctx or os.path.normcase(job["game"]) != os.path.normcase(self.ctx.root):
+            return
+        if job["proc"].returncode != 0 or not self.library.load():
+            self.refresh_objects()
+            self.status("Building the object library failed" + (f": {error[6:]}" if error else "."), "warn")
+            return
+        self.refresh_objects()
+        self.status(f"Object library ready: {len(self.library.entries)} objects.", "ok")
+
     def ensure_library(self):
+        """Library available? Waits for a running background build, or builds now."""
         if self.library.entries is not None or self.library.load():
             return True
-        if not messagebox.askyesno(
-                "Object library",
-                "The object library is built once by scanning all original missions "
-                "(about 15 seconds). Build it now?", parent=self.root):
-            return False
+        job = self._lib_job
+        if job is not None:
+            self.root.config(cursor="watch")
+            while job["proc"].poll() is None:
+                self._read_library_progress(job)
+                self.status(self.library_progress_text())
+                self.root.update()
+                time.sleep(0.05)
+            self.idle()
+            self._finish_library(job)
+            return self.library.entries is not None
         self.root.config(cursor="watch")
 
         def progress(n, total, name):
@@ -2657,6 +2751,7 @@ class EditorApp:
 
     def quit(self):
         if self.guard_unsaved():
+            self.stop_library_build()
             self.root.destroy()
 
     # ---- rendering ---------------------------------------------------
@@ -3228,7 +3323,7 @@ def selftest(game, out_path):
         lines.append(f"tanks: {len(tank_catalogue(ctx))}")
         root = tk.Tk()
         root.withdraw()
-        app = EditorApp(root, game, idx)
+        app = EditorApp(root, game, idx, auto_library=False)
         root.update()
         lines.append(f"main window: model={'yes' if app.model else 'no'}, toolbar icons={len(app._images)}")
         root.destroy()
@@ -3242,13 +3337,33 @@ def selftest(game, out_path):
     return 0 if ok else 1
 
 
+def build_library_process(game, backup_dir, progress_path):
+    """Entry point of the background library build (--build-library)."""
+    with open(progress_path, "a", encoding="utf-8") as out:
+        try:
+            lib = ObjectLibrary(GameContext(game), backup_dir)
+
+            def progress(n, total, name):
+                out.write(f"{n} {total} {name}\n")
+                out.flush()
+            lib.build(progress)
+            return 0
+        except Exception as e:
+            out.write(f"ERROR {e}\n")
+            return 1
+
+
 def main():
     ap = argparse.ArgumentParser(description="Tank Battle Classic mission editor")
     ap.add_argument("--game", default=os.environ.get("TBC_GAME"),
                     help="game folder (holds GameAssembly.dll); default: last used or detected in Steam")
     ap.add_argument("--scene", type=int, default=None, help="scene index to open (levelN)")
     ap.add_argument("--selftest", metavar="RESULT_FILE", help="check the installation and exit")
+    ap.add_argument("--build-library", nargs=3, metavar=("GAME", "BACKUP_DIR", "PROGRESS_FILE"),
+                    help=argparse.SUPPRESS)
     args = ap.parse_args()
+    if args.build_library:
+        sys.exit(build_library_process(*args.build_library))
     if args.selftest:
         sys.exit(selftest(args.game, args.selftest))
     if sys.platform == "win32":
