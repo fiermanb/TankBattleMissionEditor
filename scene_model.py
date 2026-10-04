@@ -971,7 +971,9 @@ class SceneModel:
         mission events and unused waypoints. Kept are the game systems, light,
         terrain, navigation mesh, the player's spawn, the 'mission failed'
         events that trigger on the player's destruction, and objects over holes
-        in the terrain (tunnels), which would otherwise leave open pits. Call inside
+        in the terrain (tunnels), which would otherwise leave open pits. The
+        scenery container itself stays active (only its contents are switched
+        off), so objects added later are visible. Call inside
         begin()/commit(). Returns (events, waypoints, objects) removed."""
         sc = self.sc
         keep = {e for e in self.spawns
@@ -1010,6 +1012,8 @@ class SceneModel:
             while g is not None and g not in needed:
                 needed.add(g)
                 g = self.parent_go(g)
+        needed |= {g for g, d in self.go.items()
+                   if self.parent_go(g) is None and d["m_Name"] in ("Level_Objects", "Level_Object")}
 
         objects = 0
 

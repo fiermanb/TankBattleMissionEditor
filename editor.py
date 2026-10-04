@@ -1390,7 +1390,7 @@ class EditorApp:
                 go = self.create_event(key[1])
                 m.move_to(m.tr_of_go[go], x, z, self.follow_var.get())
                 return go
-            self.busy("Creating the event...")
+            self.busy("Creating the event...", banner=False)
             new = self.op("Add event", do)
             self.idle()
             if new is not None:
@@ -2029,9 +2029,10 @@ class EditorApp:
             self.root.after_cancel(self._banner_after)
         self._banner_after = self.root.after(4000, lambda: c.delete("banner"))
 
-    def busy(self, text):
+    def busy(self, text, banner=True):
         self.status(text)
-        self.show_banner(text)
+        if banner:
+            self.show_banner(text)
         self.root.config(cursor="watch")
         self.root.update()
 
@@ -2479,7 +2480,7 @@ class EditorApp:
         if not m:
             self.status("Open a mission first.", banner=True)
             return
-        self.busy(f"Adding {entry['name']}...")
+        self.busy(f"Adding {entry['name']}...", banner=False)
         result = self.op("Add object", import_object, m, self.library, entry, wx, wz, self.follow_var.get())
         self.idle()
         if result is None:
@@ -2882,7 +2883,7 @@ class EditorApp:
             return
         where, val = choice
         if where == "new":
-            self.busy("Creating the event...")
+            self.busy("Creating the event...", banner=False)
             new = self.op("Add event", self.create_event, val)
             self.idle()
             note = " Choose its trigger tanks before playing: a tank trigger without tanks fires at once."

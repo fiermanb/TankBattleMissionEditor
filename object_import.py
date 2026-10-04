@@ -224,10 +224,15 @@ class ObjectLibrary:
         return self._sources[key]
 
 
+CONTAINER_NAMES = ("Level_Objects", "Level_Object")
+
+
 def find_container(model):
-    """Root GameObject that groups level objects in the target scene, or None."""
+    """Active root GameObject that groups level objects in the target scene, or
+    None (then imported objects go to the scene root). An inactive container
+    (for example in a scenario started on an empty terrain) would hide them."""
     for g, d in model.go.items():
-        if model.parent_go(g) is None and d["m_Name"] in ("Level_Objects", "Level_Object"):
+        if model.parent_go(g) is None and d["m_Name"] in CONTAINER_NAMES and d["m_IsActive"]:
             return g
     return None
 

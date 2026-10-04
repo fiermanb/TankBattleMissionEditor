@@ -190,6 +190,9 @@ class SceneModelTest(unittest.TestCase):
         spawns = [e for e in live if m.sc.read(e)["Event_Type"] == 0]
         self.assertEqual([m.sc.read(e)["Tank_ID"] for e in spawns], [1], "only the player spawn stays")
         self.assertTrue(all(m.sc.read(e)["Event_Type"] in (0, 11) for e in live))
+        containers = [g for g, d in m.go.items()
+                      if m.parent_go(g) is None and d["m_Name"] in ("Level_Objects", "Level_Object")]
+        self.assertTrue(all(m.go[g]["m_IsActive"] for g in containers), "scenery container stays active")
         holes = m.terrain.holes
         for g in m.mesh_of_go:
             if m.active(g) and g in m.foot and len(holes):
