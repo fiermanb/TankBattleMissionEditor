@@ -3,6 +3,6 @@
 """Application name, version and copyright (Help > About and the executable)."""
 
 APP_NAME = "Tank Battle Classic Mission Editor"
-__version__ = "1.3.1"
+__version__ = "1.3.2"
 AUTHOR = "fierman"
 COPYRIGHT = "Copyright (C) 2026 fierman"

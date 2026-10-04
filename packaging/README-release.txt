@@ -20,7 +20,8 @@ WHAT IT DOES
 - Objects pane: place objects from any mission (double-click or drag).
 - Insert waypoints (W at the cursor), routes and events; choose the tanks
   that trigger or are affected by an event.
-- Spawns and Events tables: double-click a cell to edit it.
+- Tables of spawns, events, waypoints and scenery: double-click a cell to
+  edit it.
 - New scenarios from a mission or on an empty terrain (Scenario menu); they
   appear on a "Custom Missions" page.
 

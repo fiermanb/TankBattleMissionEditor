@@ -400,6 +400,7 @@ class DockArea(tk.Frame):
         self.pages = {}
         self.order = []
         self.active = None
+        self.on_select = None
         self.cap = tk.Frame(self, bg=CAPTION_BG)
         self.cap.pack(side="top", fill="x")
         self.title_lbl = tk.Label(self.cap, text="", anchor="w", padx=4, pady=2, bg=CAPTION_BG)
@@ -451,6 +452,8 @@ class DockArea(tk.Frame):
         t.config(bg=WINDOW, fg="#000000", highlightbackground=BORDER)
         self.title_lbl.config(text=title)
         self.active = key
+        if self.on_select:
+            self.on_select(key)
 
 
 class Dialog(tk.Toplevel):
@@ -911,7 +914,9 @@ class EditorApp:
                          ("Properties", lambda: self.show_page("right", "props"), "", "props"),
                          ("Catalog", lambda: self.show_page("right", "catalog"), "", "catalog"),
                          ("Spawns table", lambda: self.show_page("bottom", "spawns"), "", "table"),
-                         ("Events table", lambda: self.show_page("bottom", "events"), "", "events")])
+                         ("Events table", lambda: self.show_page("bottom", "events"), "", "events"),
+                         ("Waypoints table", lambda: self.show_page("bottom", "waypoints"), "", "addwp"),
+                         ("Scenery table", lambda: self.show_page("bottom", "scenery"), "", "objects")])
         menu("Help", [("Controls", self.show_controls), ("About", self.show_about)])
 
     def show_controls(self):
@@ -923,7 +928,8 @@ class EditorApp:
             "Insert: W adds a waypoint at the cursor to the selected route; Insert > Route copies a route; "
             "Insert > Event... copies an event from this or another mission.\n\n"
             "Tables: double-click a cell (or F2 for the name) to edit it; Enter applies, Esc cancels. "
-            "Deleted rows are shown when the Deleted objects layer is on.\n\n"
+            "Deleted rows are shown when the Deleted objects layer is on. In the Waypoints table, Insert adds "
+            "a waypoint after the selected one. The Scenery table follows the scenery layers.\n\n"
             "Keys: Q / E rotate by the step (Shift: 1 deg), Del delete / restore, Ctrl+D duplicate, Ctrl+Z undo, "
             "Ctrl+S save, P select parent, F zoom to selection, Home full extent, Tab next spawn, "
             "L events list, T terrain follow, Esc clear selection."), parent=self.root)
@@ -979,6 +985,11 @@ class EditorApp:
         self.docks["bottom"] = DockArea(self.vpane, lambda: self.hide_dock("bottom"))
         self.build_table(self.docks["bottom"].add_page("spawns", "Table - Spawns", self.image("table")), "spawns")
         self.build_table(self.docks["bottom"].add_page("events", "Table - Events", self.image("events")), "events")
+        self.build_table(self.docks["bottom"].add_page("waypoints", "Table - Waypoints", self.image("addwp")),
+                         "waypoints")
+        self.build_table(self.docks["bottom"].add_page("scenery", "Table - Scenery", self.image("objects")),
+                         "scenery")
+        self.docks["bottom"].on_select = lambda key: self.refresh_tables()
 
         self.docks["right"] = DockArea(self.hpane, lambda: self.hide_dock("right"))
         self.build_properties(self.docks["right"].add_page("props", "Properties", self.image("props")))
@@ -1261,6 +1272,10 @@ class EditorApp:
         "events": [("name", "Name", 220), ("type", "Event type", 140), ("trigger", "Trigger", 120),
                    ("time", "Time (s)", 60), ("tanks", "Trigger tanks", 80), ("message", "Message", 300),
                    ("status", "Status", 60)],
+        "waypoints": [("route", "Route", 160), ("no", "No.", 45), ("name", "Name", 150), ("x", "X", 70),
+                      ("z", "Z", 70), ("used", "Used by", 300)],
+        "scenery": [("name", "Name", 220), ("category", "Category", 120), ("x", "X", 70), ("z", "Z", 70),
+                    ("heading", "Heading", 60), ("scale", "Scale", 60), ("status", "Status", 60)],
     }
 
     def build_table(self, body, kind):
@@ -1280,6 +1295,8 @@ class EditorApp:
         tv.bind("<<TreeviewSelect>>", lambda e, t=tv: self.on_table_select(t))
         tv.bind("<Double-Button-1>", lambda e, t=tv, k=kind: self.on_table_double(t, k, e))
         tv.bind("<F2>", lambda e, t=tv, k=kind: self.edit_cell(t, k, t.focus(), None))
+        if kind == "waypoints":
+            tv.bind("<Insert>", lambda e: self.insert_waypoint_after())
         if not hasattr(self, "tables"):
             self.tables = {}
         self.tables[kind] = tv
@@ -1298,6 +1315,8 @@ class EditorApp:
         with suggestions, None for plain text, or a callable that opens a
         dialog. Returns None when the cell cannot be edited."""
         m = self.model
+        if kind in ("waypoints", "scenery"):
+            return self.object_cell_spec(kind, go, key)
         ev = m.event_of_go(go)
         if ev is None:
             return None
@@ -1352,6 +1371,63 @@ class EditorApp:
             if key == "message":
                 return None, d["Event_Message"], field("Event_Message")
         return None
+
+    def object_cell_spec(self, kind, go, key):
+        """Cell editing for the waypoint and scenery tables."""
+        m = self.model
+        trp = m.tr_of_go.get(go)
+        if trp is None:
+            return None
+        p, r, _ = m.world(trp)
+
+        def move(axis):
+            def commit(v):
+                q = m.world(trp)[0]
+                x, z = (float(v), q[2]) if axis == 0 else (q[0], float(v))
+                self.op("Move", m.move_to, trp, x, z, self.follow_var.get())
+            return commit
+
+        if key == "name":
+            return None, m.name(go), lambda v: self.op("Rename", m.rename, go, v)
+        if key in ("x", "z"):
+            axis = 0 if key == "x" else 2
+            return None, f"{p[axis]:.1f}", move(axis)
+        if kind == "scenery" and key == "heading":
+            return None, f"{heading_of(r):.0f}", lambda v: self.op("Rotate", m.set_heading, trp, float(v))
+        if kind == "scenery" and key == "scale":
+            cur = m.tr[trp]["m_LocalScale"]["x"]
+
+            def scale(v):
+                v = float(v)
+                if v <= 0 or not cur:
+                    raise ValueError(v)
+                self.op("Scale", m.set_scale, trp, v / cur)
+            return None, f"{cur:.2f}", scale
+        return None
+
+    def insert_waypoint_after(self):
+        """Insert a waypoint after the selected one: halfway to the next waypoint,
+        or 10 m further along the route after the last one."""
+        m = self.model
+        route = self.target_route() if m else None
+        if not route or route[1] is None:
+            self.status("Select a waypoint in the table first.", "warn")
+            return
+        pack, trp = route
+        kids = [c["m_PathID"] for c in m.tr[pack]["m_Children"] if c["m_PathID"] in m.tr]
+        i = kids.index(trp)
+        p = m.world(trp)[0]
+        if i + 1 < len(kids):
+            q = m.world(kids[i + 1])[0]
+            at = ((p[0] + q[0]) / 2, (p[2] + q[2]) / 2)
+        elif i > 0:
+            q = m.world(kids[i - 1])[0]
+            d = np.array((p[0] - q[0], p[2] - q[2]))
+            n = float(np.hypot(*d)) or 1.0
+            at = (p[0] + d[0] / n * 10, p[2] + d[1] / n * 10)
+        else:
+            at = (p[0] + 10, p[2])
+        self.add_waypoint(at)
 
     def edit_cell(self, tv, kind, iid, col):
         """Edit one table cell in place (double-click, or F2 for the name).
@@ -1449,11 +1525,16 @@ class EditorApp:
         if not hasattr(self, "tables"):
             return
         m = self.model
-        for tv in self.tables.values():
-            tv.delete(*tv.get_children())
+        for kind, tv in self.tables.items():
+            if kind != "scenery":
+                tv.delete(*tv.get_children())
         if not m:
+            self.tables["scenery"].delete(*self.tables["scenery"].get_children())
+            self._scenery_table_key = None
             return
         show_deleted = self.layer("Deleted")
+        self.fill_waypoint_table()
+        self.fill_scenery_table()
         for e in m.spawns:
             d = m.sc.read(e)
             go = m.event_go[e]
@@ -1480,6 +1561,61 @@ class EditorApp:
                 len(d["Trigger_Tanks"]), d["Event_Message"].replace("\n", " "),
                 "active" if m.active(go) else "deleted"))
         self.sync_table_selection()
+
+    def fill_waypoint_table(self):
+        m = self.model
+        users = {}
+        for e in m.spawns:
+            pack = m.spawn_pack(e)
+            if pack and m.active(m.event_go[e]):
+                users.setdefault(pack, []).append(m.name(m.event_go[e]))
+        tv = self.tables["waypoints"]
+        for pack in m.packs:
+            route = m.name(m.go_of_tr[pack])
+            used = ", ".join(sorted(users.get(pack, [])))
+            n = 0
+            for c in m.tr[pack]["m_Children"]:
+                trp = c["m_PathID"]
+                if trp not in m.tr:
+                    continue
+                n += 1
+                go = m.go_of_tr[trp]
+                p = m.world(trp)[0]
+                tv.insert("", "end", iid=str(go), values=(route, n, m.name(go), f"{p[0]:.1f}", f"{p[2]:.1f}", used))
+
+    def fill_scenery_table(self):
+        """One row per whole scenery object, filtered by the scenery layers. Only
+        rebuilt while its page is shown, and only after an edit."""
+        m = self.model
+        tv = self.tables["scenery"]
+        if self.docks["bottom"].active != "scenery":
+            return
+        cats = tuple(self.layer(c) for c in CATEGORY_COLOURS)
+        key = (id(m), m.edits, self.layer("Deleted"), cats)
+        if getattr(self, "_scenery_table_key", None) == key:
+            return
+        self._scenery_table_key = key
+        tv.delete(*tv.get_children())
+        show_deleted = self.layer("Deleted")
+        roots = {m.object_root(g) for g in m.foot}
+        rows = []
+        for g in roots:
+            active = m.active(g)
+            if not show_deleted and not active:
+                continue
+            cat = category(m.name(g))
+            if not self.layer(cat):
+                continue
+            trp = m.tr_of_go[g]
+            p, r, _ = m.world(trp)
+            sc = m.tr[trp]["m_LocalScale"]
+            scale = f"{sc['x']:.2f}" if abs(sc["x"] - sc["y"]) < 1e-3 and abs(sc["x"] - sc["z"]) < 1e-3 else \
+                f"{sc['x']:.2f} {sc['y']:.2f} {sc['z']:.2f}"
+            rows.append((m.name(g).lower(), g, (m.name(g), cat, f"{p[0]:.1f}", f"{p[2]:.1f}",
+                                                f"{heading_of(r):.0f}", scale, "active" if active else "deleted")))
+        rows.sort()
+        for _, g, values in rows:
+            tv.insert("", "end", iid=str(g), values=values)
 
     def sync_table_selection(self):
         if not hasattr(self, "tables"):
