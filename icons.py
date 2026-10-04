@@ -6,6 +6,8 @@ Each icon is drawn on a 64 x 64 canvas and reduced to the toolbar size, which
 gives smooth edges at any display scale.
 """
 
+import math
+
 from PIL import Image, ImageDraw
 
 BLACK = (0, 0, 0, 255)
@@ -230,8 +232,71 @@ def swatch(kind, colour, size):
         d.polygon([(4, 60), (24, 26), (36, 44), (44, 34), (60, 60)], fill=(140, 120, 80, 255))
     elif kind == "outline":
         d.rectangle((6, 6, 58, 58), outline=c, width=6)
+    elif kind == "route":
+        pts = [(8, 54), (26, 24), (42, 42), (58, 10)]
+        d.line(pts, fill=BLACK, width=7)
+        d.line(pts, fill=c, width=3)
+        for x, y in pts:
+            d.polygon([(x, y - 7), (x + 7, y), (x, y + 7), (x - 7, y)], fill=c, outline=BLACK)
     else:
         d.rectangle((6, 6, 58, 58), fill=c, outline=BLACK, width=2)
+    return img.resize((size, size), Image.LANCZOS)
+
+
+def _flag(d, colour):
+    d.line((14, 6, 14, 60), fill=BLACK, width=5)
+    d.polygon([(16, 8), (58, 18), (16, 32)], fill=colour, outline=BLACK)
+
+
+def event_icon(event_type, size):
+    """Legend symbol of an event type (Objects pane, Add here menu)."""
+    img, d = _canvas()
+    t = event_type
+    if t == 1:
+        d.rounded_rectangle((4, 8, 60, 44), radius=8, fill=WHITE, outline=BLACK, width=3)
+        d.polygon([(16, 43), (14, 58), (30, 43)], fill=WHITE, outline=BLACK)
+        for y in (18, 26, 34):
+            d.line((14, y, 50, y), fill=GREY, width=3)
+    elif t == 2:
+        for i in range(8):
+            a = i * math.pi / 4
+            d.line((32, 32, 32 + 26 * math.cos(a), 32 + 26 * math.sin(a)), fill=(90, 90, 100, 255), width=9)
+        d.ellipse((14, 14, 50, 50), fill=(150, 150, 160, 255), outline=BLACK, width=3)
+        d.ellipse((25, 25, 39, 39), fill=WHITE, outline=BLACK, width=2)
+    elif t == 3:
+        d.polygon([(32, 6), (60, 58), (4, 58)], fill=(150, 150, 150, 255), outline=BLACK)
+        d.line((12, 14, 52, 54), fill=RED, width=8)
+        d.line((52, 14, 12, 54), fill=RED, width=8)
+    elif t == 4:
+        pts = []
+        for i in range(16):
+            r = 28 if i % 2 == 0 else 12
+            a = i * math.pi / 8
+            pts.append((32 + r * math.cos(a), 32 + r * math.sin(a)))
+        d.polygon(pts, fill=(245, 140, 30, 255), outline=BLACK)
+        d.ellipse((24, 24, 40, 40), fill=(255, 230, 90, 255))
+    elif t == 6:
+        d.ellipse((8, 8, 56, 56), outline=RED, width=6)
+        d.ellipse((24, 24, 40, 40), outline=RED, width=5)
+        for a, b in (((32, 2), (32, 20)), ((32, 44), (32, 62)), ((2, 32), (20, 32)), ((44, 32), (62, 32))):
+            d.line((a, b), fill=RED, width=5)
+    elif t == 7:
+        for i in range(8):
+            a = i * math.pi / 4
+            d.line((32 + 18 * math.cos(a), 32 + 18 * math.sin(a), 32 + 30 * math.cos(a), 32 + 30 * math.sin(a)),
+                   fill=(230, 160, 0, 255), width=6)
+        d.ellipse((16, 16, 48, 48), fill=(255, 210, 60, 255), outline=BLACK, width=3)
+    elif t == 10:
+        _flag(d, GREEN)
+    elif t == 11:
+        _flag(d, RED)
+    elif t == 12:
+        d.polygon([(36, 2), (12, 36), (30, 36), (24, 62), (52, 24), (34, 24)], fill=YELLOW, outline=BLACK)
+    elif t == 13:
+        d.ellipse((4, 4, 60, 60), fill=BLUE, outline=BLACK, width=3)
+        d.polygon([(24, 16), (48, 32), (24, 48)], fill=WHITE)
+    else:
+        d.rectangle((6, 6, 58, 58), fill=NAVY, outline=BLACK, width=2)
     return img.resize((size, size), Image.LANCZOS)
 
 

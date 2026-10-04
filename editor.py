@@ -1007,10 +1007,11 @@ class EditorApp:
         self.build_properties(self.docks["right"].add_page("props", "Properties", self.image("props")))
         self.build_catalog(self.docks["right"].add_page("catalog", "Catalog", self.image("catalog")))
         self.docks["right"].select("catalog")
+        self.docks["left"].select("objects")
 
         self.vpane.add(self.mapframe, minsize=200, stretch="always")
         self.vpane.add(self.docks["bottom"], minsize=90, height=230, stretch="never")
-        self.hpane.add(self.docks["left"], minsize=170, width=270, stretch="never")
+        self.hpane.add(self.docks["left"], minsize=170, width=310, stretch="never")
         self.hpane.add(self.vpane, minsize=300, stretch="always")
         self.hpane.add(self.docks["right"], minsize=230, width=340, stretch="never")
         self.bind_canvas()
@@ -1044,7 +1045,7 @@ class EditorApp:
             shown = {str(p) for p in self.hpane.panes()}
             if str(pane) not in shown:
                 if dock == "left":
-                    self.hpane.add(pane, before=self.vpane, minsize=170, width=270, stretch="never")
+                    self.hpane.add(pane, before=self.vpane, minsize=170, width=310, stretch="never")
                 else:
                     self.hpane.add(pane, after=self.vpane, minsize=230, width=340, stretch="never")
         pane.select(page)
@@ -1338,9 +1339,9 @@ class EditorApp:
         self.obj_tree.heading("#0", text="Object", anchor="w")
         self.obj_tree.heading("size", text="Size (m)", anchor="w")
         self.obj_tree.heading("source", text="From mission", anchor="w")
-        self.obj_tree.column("#0", width=150, stretch=True)
-        self.obj_tree.column("size", width=60, stretch=False)
-        self.obj_tree.column("source", width=120, stretch=False)
+        self.obj_tree.column("#0", width=170, stretch=True)
+        self.obj_tree.column("size", width=55, stretch=False)
+        self.obj_tree.column("source", width=70, stretch=True)
         sb = ttk.Scrollbar(holder, command=self.obj_tree.yview)
         self.obj_tree.configure(yscrollcommand=sb.set)
         sb.pack(side="right", fill="y")
@@ -1356,12 +1357,21 @@ class EditorApp:
     def create_items(self):
         """(group, label, icon, key) of the new-object templates in the Objects pane
         and the 'Add here' menu."""
-        items = [("Tanks", "Hostile tank", "addhost", ("spawn", 1)),
-                 ("Tanks", "Friendly tank", "addfriend", ("spawn", 0)),
-                 ("Routes", "New route", "addroute", ("route",)),
-                 ("Routes", "Waypoint (selected route)", "addwp", ("waypoint",))]
-        items += [("Events", name, "addevent", ("event", t)) for t, name in sorted(EVENT_TYPES.items()) if t != 0]
+        items = [("Tanks", "Hostile tank", ("swatch", "triangle", COL_HOSTILE), ("spawn", 1)),
+                 ("Tanks", "Friendly tank", ("swatch", "triangle", COL_FRIEND), ("spawn", 0)),
+                 ("Routes", "New route", ("swatch", "route", PACK_COLOURS[0]), ("route",)),
+                 ("Routes", "Waypoint", ("swatch", "diamond", PACK_COLOURS[0]), ("waypoint",))]
+        items += [("Events", name, ("event", t), ("event", t)) for t, name in sorted(EVENT_TYPES.items()) if t != 0]
         return items
+
+    def legend(self, spec):
+        """Legend symbol image: ("swatch", kind, colour) as drawn on the map, or
+        ("event", type)."""
+        if spec not in self._images:
+            img = (icons.event_icon(spec[1], self.icon_size) if spec[0] == "event"
+                   else icons.swatch(spec[1], spec[2], self.icon_size))
+            self._images[spec] = ImageTk.PhotoImage(img)
+        return self._images[spec]
 
     def create_at(self, key, x, z):
         """Create the object of a template (Objects pane or 'Add here') at (x, z)."""
@@ -1403,8 +1413,8 @@ class EditorApp:
             if f and f not in text.lower() and f not in group.lower():
                 continue
             if group not in groups:
-                groups[group] = t.insert("", "end", text=" " + group, open=group != "Events" or bool(f))
-            iid = t.insert(groups[group], "end", text=" " + text, image=self.image(icon), values=("", "new"))
+                groups[group] = t.insert("", "end", text=" " + group, open=True)
+            iid = t.insert(groups[group], "end", text=" " + text, image=self.legend(icon), values=("", "new"))
             self.obj_templates[iid] = key
         lib = getattr(self, "library", None)
         if lib is not None and lib.entries is None:
@@ -1425,9 +1435,10 @@ class EditorApp:
         for i, e in enumerate(lib.entries):
             if f and f not in e["name"].lower() and f not in e["category"].lower():
                 continue
+            sym = self.legend(("swatch", "square", CATEGORY_COLOURS.get(e["category"], (128, 128, 118))))
             if e["category"] not in cats:
-                cats[e["category"]] = t.insert("", "end", text=" " + e["category"], open=bool(f))
-            iid = t.insert(cats[e["category"]], "end", text=" " + e["name"],
+                cats[e["category"]] = t.insert("", "end", text=" " + e["category"], image=sym, open=bool(f))
+            iid = t.insert(cats[e["category"]], "end", text=" " + e["name"], image=sym,
                            values=(f"{e['w']:.0f} x {e['d']:.0f}", self.library.source_label(e)))
             self.obj_entries[iid] = e
 
@@ -3421,14 +3432,15 @@ class EditorApp:
         for group, text, icon, key in self.create_items():
             target = events if group == "Events" else add
             enabled = key != ("waypoint",) or bool(self.target_route())
-            target.add_command(label=text, compound="left", image=self.image(icon),
+            target.add_command(label=text, compound="left", image=self.legend(icon),
                                state="normal" if enabled else "disabled",
                                command=lambda k=key: self.create_at(k, wx, wz))
             if key == ("waypoint",):
-                add.add_cascade(label="Event", menu=events, compound="left", image=self.image("addevent"))
+                add.add_cascade(label="Event", menu=events, compound="left", image=self.legend(("event", 1)))
                 add.add_separator()
         add.add_command(label="Move player here", command=lambda: self.move_player_here(wx, wz))
-        menu.insert_cascade(0, label="Add here", menu=add, compound="left", image=self.image("addhost"))
+        menu.insert_cascade(0, label="Add here", menu=add, compound="left",
+                            image=self.legend(("swatch", "triangle", COL_HOSTILE)))
         menu.insert_separator(1)
         try:
             menu.tk_popup(e.x_root, e.y_root)
