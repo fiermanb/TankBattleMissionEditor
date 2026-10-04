@@ -125,6 +125,45 @@ class ScenarioTest(unittest.TestCase):
             self.assertFalse(os.path.exists(os.path.join(data, f"level{base}")))
             self.assertFalse(os.path.exists(os.path.join(data, f"sharedassets{base + 3}.assets")))
 
+    def test_game_update_sets_backups_aside(self):
+        tmp = tempfile.mkdtemp(dir=os.path.dirname(GAME))
+        self.addCleanup(remove_tree, tmp)
+        game = os.path.join(tmp, "game")
+        os.makedirs(game)
+        data = mirror_game(game)
+        ctx = GameContext(game)
+        base = len(ctx.scene_names)
+        bdir = os.path.join(tmp, "backups")
+        mgr = ScenarioManager(ctx, bdir)
+        self.assertIsNone(mgr.check_game_update(), "fresh installation: nothing to report")
+        src = next(p for p, d in mgr.missions() if d["Battle_Scene_Name"] == "10_Urban_Area_Close_Combat_Basic")
+        mgr.create(src, "Before Update", "Text.")
+        self.assertIsNone(mgr.check_game_update())
+        # simulate a game update: original shared files back, new game fingerprint
+        for n in SHARED_FILES:
+            with open(os.path.join(bdir, "shared", n + ".orig"), "rb") as f:
+                raw = f.read()
+            os.remove(os.path.join(data, n))
+            with open(os.path.join(data, n), "wb") as f:
+                f.write(raw)
+        with open(os.path.join(bdir, "game.json"), "w", encoding="utf-8") as f:
+            f.write('{"metadata_sha256": "older-version"}')
+        ctx.reload_build_settings()
+        report = ScenarioManager(ctx, bdir).check_game_update()
+        self.assertEqual(report["orphaned"], ["Before Update"])
+        self.assertTrue(report["archive"] and os.path.isdir(os.path.join(report["archive"], "shared")))
+        self.assertFalse(os.path.exists(os.path.join(bdir, "shared", "globalgamemanagers.orig")))
+        self.assertEqual(sorted(report["leftovers"]),
+                         sorted([f"level{base}", f"level{base + 1}", f"sharedassets{base}.assets",
+                                 f"sharedassets{base + 1}.assets"]))
+        mgr2 = ScenarioManager(ctx, bdir)
+        self.assertEqual(mgr2.custom, [])
+        done = mgr2.delete_leftovers(report["leftovers"])
+        self.assertEqual(len(done), 4)
+        self.assertFalse(os.path.exists(os.path.join(data, f"level{base}")))
+        self.assertTrue(os.path.exists(os.path.join(data, f"level{base - 1}")), "game scenes untouched")
+        self.assertIsNone(ScenarioManager(ctx, bdir).check_game_update(), "reported only once")
+
 
 if __name__ == "__main__":
     unittest.main()

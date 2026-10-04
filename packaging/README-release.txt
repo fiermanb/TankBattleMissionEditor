@@ -35,7 +35,8 @@ BACKUPS
 The first save of a level keeps the original (File > Restore original).
 Scenario > Remove custom scenarios undoes all scenarios. Backups and settings
 are in %LOCALAPPDATA%\TankBattleMissionEditor. Steam's "Verify integrity of game
-files" also restores everything.
+files" also restores everything. After a game update the editor sets the old
+backups aside and lists custom scenarios that the update removed.
 
 LIMITATIONS
 -----------

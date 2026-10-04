@@ -16,8 +16,15 @@ and adds a row on a "Custom Missions" page of the mission select screen.
 The three shared files (globalgamemanagers, sharedassets2.assets, level2) are
 backed up once before the first change; "remove all" restores them and deletes
 the added scene files.
+
+A game update (or Steam's "Verify integrity of game files") replaces the game
+files: custom scenarios disappear from the scene list and the backups belong to
+the old game version. check_game_update() detects this from a fingerprint of
+the game stored with the backups, sets the old backups aside instead of ever
+restoring them, and reports the custom scenarios that are no longer in the game.
 """
 
+import datetime
 import json
 import os
 import re
@@ -345,11 +352,82 @@ class ScenarioManager:
                 with open(src, "rb") as f:
                     replace_file(os.path.join(self.ctx.data_dir, name), f.read())
 
+    # ---- game updates ----------------------------------------------------
+
+    def _fingerprint(self):
+        return {"metadata_sha256": self.ctx.metadata_sha256}
+
+    def check_game_update(self):
+        """Detect replaced game files since the backups were made. Returns None,
+        or {"archive": folder or None, "orphaned": [titles], "leftovers": [files]}."""
+        path = os.path.join(self.backup_dir, "game.json")
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                stored = json.load(f)
+        except (OSError, ValueError):
+            stored = None
+        names = {os.path.splitext(os.path.basename(p))[0] for p in self.ctx.scene_names}
+        orphaned = [s for s in self.manifest.get("scenarios", []) if s["battle_scene"] not in names]
+        if stored is None:
+            stale = bool(orphaned)
+        else:
+            stale = stored.get("metadata_sha256") != self.ctx.metadata_sha256 or bool(orphaned)
+        report = None
+        if stale:
+            archive = None
+            old = [f for f in os.listdir(self.backup_dir) if re.fullmatch(r"level\d+\.orig", f)]
+            if os.path.isdir(self.shared_dir) and os.listdir(self.shared_dir):
+                old.append("shared")
+            if old:
+                stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+                archive = os.path.join(self.backup_dir, f"before-update-{stamp}")
+                os.makedirs(archive)
+                for f in old:
+                    shutil.move(os.path.join(self.backup_dir, f), os.path.join(archive, f))
+            leftovers = []
+            for s in orphaned:
+                for idx in (s["menu_index"], s["battle_index"]):
+                    for f in (f"level{idx}", f"sharedassets{idx}.assets"):
+                        if idx >= len(self.ctx.scene_names) and os.path.exists(os.path.join(self.ctx.data_dir, f)):
+                            leftovers.append(f)
+            kept = [s for s in self.manifest.get("scenarios", []) if s not in orphaned]
+            self.manifest["orphaned"] = self.manifest.get("orphaned", []) + orphaned
+            self.manifest["scenarios"] = kept
+            if not kept:
+                self.manifest["base_scene_count"] = None
+                self.manifest["pages"] = []
+            self._save_manifest()
+            report = {"archive": archive, "orphaned": [s["title"] for s in orphaned], "leftovers": leftovers}
+        if stale or stored is None:
+            os.makedirs(self.backup_dir, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self._fingerprint(), f, indent=2)
+        return report
+
+    def delete_leftovers(self, files):
+        """Delete scene files of scenarios that are no longer in the game's scene list."""
+        done = []
+        for f in files:
+            m = re.fullmatch(r"(?:level(\d+)|sharedassets(\d+)\.assets)", f)
+            if not m or int(m.group(1) or m.group(2)) < len(self.ctx.scene_names):
+                continue
+            p = os.path.join(self.ctx.data_dir, f)
+            if os.path.exists(p):
+                os.remove(p)
+                done.append(f)
+        self.manifest["orphaned"] = []
+        self._save_manifest()
+        return done
+
     def has_changes(self):
         return any(os.path.exists(os.path.join(self.shared_dir, n + ".orig")) for n in SHARED_FILES)
 
     def remove_all(self):
         """Restore the shared files and delete every added scene file."""
+        if self.manifest.get("scenarios") and not all(
+                os.path.exists(os.path.join(self.shared_dir, n + ".orig")) for n in SHARED_FILES):
+            raise ValueError("the backups of the shared game files are missing (the game was updated after "
+                             "these scenarios were made); use Steam's 'Verify integrity of game files'")
         base = self.manifest.get("base_scene_count")
         self._restore_shared_files()
         if base is not None:

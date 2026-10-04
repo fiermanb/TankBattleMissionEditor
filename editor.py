@@ -721,6 +721,26 @@ class EditorApp:
         else:
             self.status("Double-click a mission in the Catalog, or use File > Open mission.")
 
+    def report_game_update(self, update):
+        """Tell the user what a game update (or file verification) changed."""
+        lines = ["The game files were replaced since the editor last changed them (game update, or "
+                 "Steam's 'Verify integrity of game files')."]
+        if update["archive"]:
+            lines.append(f"\nThe old backups belong to the previous game version and were set aside in:\n"
+                         f"{update['archive']}\nThey will not be restored. New backups are made on the next save.")
+        if update["orphaned"]:
+            lines.append("\nThese custom scenarios are no longer in the game: " + ", ".join(update["orphaned"]) +
+                         ". Recreate them with Scenario > New scenario.")
+        if update["leftovers"]:
+            lines.append("\nTheir leftover files (" + ", ".join(update["leftovers"]) + ") are not used by "
+                         "the game any more.\n\nDelete these leftover files now?")
+            if messagebox.askyesno("Game updated", "\n".join(lines), parent=self.root):
+                done = self.scenarios.delete_leftovers(update["leftovers"])
+                self.status(f"Deleted {len(done)} leftover file(s) of removed scenarios.", "ok")
+        else:
+            messagebox.showinfo("Game updated", "\n".join(lines), parent=self.root)
+        self.refresh_scenes()
+
     def resolve_game(self, requested):
         """Game folder from the command line, the settings, the Steam libraries or the user."""
         reason = None
@@ -769,6 +789,11 @@ class EditorApp:
             self.status("Existing backups were moved to this installation's backup folder.")
         self.scenarios = ScenarioManager(ctx, self.backup_dir)
         self.library = ObjectLibrary(ctx, self.backup_dir)
+        update = None
+        try:
+            update = self.scenarios.check_game_update()
+        except OSError as e:
+            self.status(f"Checking the backups failed: {e}", "warn")
         self.model = None
         self.selected = None
         self._base_key = None
@@ -780,9 +805,12 @@ class EditorApp:
         self.update_title()
         self.request_render()
         self.idle()
+        if update:
+            self.report_game_update(update)
         if ctx.verify_layouts:
-            self.status("This game version is newer than the editor. Missions whose scripts changed "
-                        "cannot be edited until the editor is updated.", "warn", banner=True)
+            self.status("Game updated: " + ", ".join(ctx.affected_script_names()) + " changed or new; objects "
+                        "using these scripts cannot be edited until the editor is updated. Everything else "
+                        "works as before.", "warn", banner=True)
         else:
             self.status(f"Game folder: {game}", "ok")
 

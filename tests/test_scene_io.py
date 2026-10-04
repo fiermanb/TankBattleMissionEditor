@@ -45,18 +45,21 @@ class SceneIoTest(unittest.TestCase):
         self.assertGreater(n, 1000)
 
     def test_changed_script_layout_is_refused(self):
-        from scene_io import LayoutMismatch, script_key
-        ctx = GameContext(GAME)
-        key = next(k for k in ctx.layouts if k.endswith("Event_Controller_CS"))
-        ctx.layouts[key] = [row for row in ctx.layouts[key] if row[2] != "Trigger_Time"]
-        ctx.layouts_exact, ctx.generator, ctx._node_cache = False, None, {}
-        self.assertTrue(ctx.verify_layouts)
-        sc = SceneFile(ctx, ctx.scene_path(12))
-        ev = next(p for p in sc.all_pids() if sc.type_name(p) == "MonoBehaviour"
-                  and sc.script_class(p) == "Event_Controller_CS")
-        with self.assertRaises(LayoutMismatch):
-            sc.read(ev)
-        self.assertTrue(script_key("a", "", "b"))
+        from scene_io import LayoutMismatch
+        for mode in ("hash", "size"):
+            ctx = GameContext(GAME)
+            ctx.generator, ctx._node_cache = None, {}
+            key = next(k for k in ctx.layouts if k.endswith("Event_Controller_CS"))
+            if mode == "hash":
+                ctx.changed_scripts = {key}
+                self.assertTrue(ctx.verify_layouts)
+            else:
+                ctx.layouts[key] = [row for row in ctx.layouts[key] if row[2] != "Trigger_Time"]
+            sc = SceneFile(ctx, ctx.scene_path(12))
+            ev = next(p for p in sc.all_pids() if sc.type_name(p) == "MonoBehaviour"
+                      and sc.script_class(p) == "Event_Controller_CS")
+            with self.assertRaises(LayoutMismatch, msg=mode):
+                sc.read(ev)
 
     def test_modify_and_clone_reload(self):
         sc = SceneFile(self.ctx, self.ctx.scene_path(12))

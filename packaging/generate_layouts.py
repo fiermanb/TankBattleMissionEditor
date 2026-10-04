@@ -7,8 +7,9 @@
 
 Run this after a game update and release a new editor version. It is the only
 place that needs TypeTreeGeneratorAPI; the editor and the executable read the
-generated file. The file records the game's Unity version and a fingerprint of
-its script metadata, so the editor can tell when the game has changed.
+generated file. The file records the game's Unity version, a fingerprint of
+its script metadata and the layout hash of every script the game files use, so
+the editor can tell exactly which scripts a later game update changed.
 """
 
 import argparse
@@ -48,9 +49,10 @@ def main():
             layouts[script_key(asm, ns, cls)] = fixed_layout(base)
         else:
             failed += 1
+    hashes = {k: sorted(v) for k, v in ctx.script_metadata()[0].items() if k in layouts}
     data = {"info": {"unity_version": ctx.unity_version, "metadata_sha256": ctx.metadata_sha256,
                      "generated": datetime.date.today().isoformat(), "count": len(layouts)},
-            "layouts": layouts}
+            "layouts": layouts, "hashes": hashes}
     out = os.path.join(SRC, LAYOUTS_FILE)
     os.makedirs(os.path.dirname(out), exist_ok=True)
     with gzip.open(out, "wt", encoding="utf-8", compresslevel=9) as f:
