@@ -927,7 +927,7 @@ class EditorApp:
             "Alt + click selects a single part instead of the whole object.\n\n"
             "Insert: W adds a waypoint at the cursor to the selected route; Insert > Route starts a new route "
             "(click its waypoints, Esc ends); "
-            "Insert > Event... copies an event from this or another mission.\n\n"
+            "Insert > Event... creates a new event or copies one from this or another mission.\n\n"
             "Tables: double-click a cell (or F2 for the name) to edit it; Enter applies, Esc cancels. "
             "Deleted rows are shown when the Deleted objects layer is on. In the Waypoints table, Insert adds "
             "a waypoint after the selected one. The Scenery table follows the scenery layers.\n\n"
