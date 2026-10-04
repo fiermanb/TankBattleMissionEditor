@@ -18,8 +18,9 @@ WHAT IT DOES
 - Tank settings: type, side, AI behaviour, respawns, unit group, follow target.
 - Mission settings (nothing selected): fog, visibility, recon plane.
 - Objects pane: new tanks, routes, waypoints and events, and objects from
-  any mission. Click an item, then click on the map; Enter, Esc or
-  right-click finishes. Right-click > Add here places at the pointer.
+  any mission. Double-click places at the map centre, or drag onto the map.
+  A new route takes its waypoints click by click; Enter, Esc or right-click
+  finishes. Right-click > Add here places at the pointer.
 - Table Of Contents: double-click opens a layer's table; right-click
   selects, zooms or shows only that layer.
 - Tables of spawns, events, waypoints and scenery: double-click a cell to

@@ -24,7 +24,8 @@ The editor finds the game in your Steam libraries or asks for its folder
   (allied groups); one tank or many at once.
 - Mission settings (nothing selected): fog, visibility, recon plane.
 - Objects pane: new tanks, routes, waypoints and events, and objects from any
-  mission. Click an item, then click on the map; Enter, Esc or right-click
+  mission. Double-click places at the map centre, or drag onto the map. A new
+  route takes its waypoints click by click; Enter, Esc or right-click
   finishes. Right-click > Add here places at the pointer; Insert in a table
   adds a row.
 - Table Of Contents: layer counts; double-click opens the layer's table,

@@ -96,8 +96,8 @@ TOC_LAYERS = [
     ("Deleted", "Deleted objects", "square", COL_HIDDEN, None),
 ]
 TOC_DEFAULT_OFF = {"Deleted"}
-OBJ_HINT = ("Click an item, then click on the map to place it (Finish, Enter, Esc or right-click ends). "
-            "Double-click places at the map centre; dragging onto the map also works.")
+OBJ_HINT = ("Double-click an item to place it at the map centre, or drag it onto the map. New route: "
+            "double-click or drag it, then click its waypoints; Finish, Enter, Esc or right-click ends.")
 DOUBLE_CLICK_MS = 400
 
 TOOLS = ("select", "pan", "zoomin", "zoomout", "rotate")
@@ -716,7 +716,6 @@ class EditorApp:
 
     def __init__(self, root, game_root, scene, auto_library=True):
         self.root = root
-        self._obj_select_quiet = False
         self.auto_library = auto_library
         self._lib_job = None
         self.view = View()
@@ -930,10 +929,10 @@ class EditorApp:
             "the selection; Shift snaps to the step).\n\n"
             "Always: middle or right drag pans, the mouse wheel zooms.\n"
             "Alt + click selects a single part instead of the whole object.\n\n"
-            "Objects pane: click an item (tank, route, waypoint, event or object), then click on the map to "
-            "place it, as often as needed. Finish, Enter, Esc, a right-click or a double-click on the map "
-            "ends placing; a dashed line shows where the next waypoint joins the route. Double-click an item "
-            "to place it at the map centre. Right-click > Add here places at the pointer.\n"
+            "Objects pane: double-click an item (tank, waypoint, event or object) to place it at the map "
+            "centre, or drag it onto the map. New route: double-click or drag it, then click its waypoints; "
+            "Finish, Enter, Esc, a right-click or a double-click on the map ends the route, and a dashed line "
+            "shows where the next waypoint joins. Right-click > Add here places at the pointer.\n"
             "Table Of Contents: click a check box to show or hide a layer; double-click a layer to open its "
             "table; right-click for Select all objects, Zoom to layer and Show only this layer.\n"
             "Insert: W adds a waypoint at the cursor to the selected route; Insert > Route starts a new route; "
@@ -1347,7 +1346,6 @@ class EditorApp:
         sb.pack(side="right", fill="y")
         self.obj_tree.pack(side="left", fill="both", expand=True)
         self.obj_tree.bind("<Double-Button-1>", lambda e: (self.place_selected_object(), "break")[1])
-        self.obj_tree.bind("<<TreeviewSelect>>", lambda e: self.on_obj_select())
         self.obj_tree.bind("<ButtonPress-1>", self.on_obj_press, add="+")
         self.obj_tree.bind("<B1-Motion>", self.on_obj_motion)
         self.obj_tree.bind("<ButtonRelease-1>", self.on_obj_release, add="+")
@@ -1400,7 +1398,7 @@ class EditorApp:
                 self.show_page("right", "props")
                 tanks = m.sc.read(m.event_of_go(new))["Trigger_Type"] == 1
                 self.status(f"Added '{m.name(new)}'. Set its trigger and tanks in Properties." +
-                            (" A tank trigger without tanks fires at once." if tanks else ""), "ok", banner=True)
+                            (" A tank trigger without tanks fires at once." if tanks else ""), "ok")
 
     def refresh_objects(self):
         t = self.obj_tree
@@ -1462,44 +1460,15 @@ class EditorApp:
         elif iid in self.obj_entries:
             self.place_object(self.obj_entries[iid], x, z)
 
-    def on_obj_select(self):
-        """Choosing an item starts placing it: every click on the map places
-        one, until Finish, Enter, Esc or a right-click."""
-        sel = self.obj_tree.selection()
-        iid = sel[0] if sel else None
-        if self._obj_select_quiet or not self.model or iid is None:
-            return
-        if iid not in self.obj_templates and iid not in self.obj_entries:
-            return
-        key = self.obj_templates.get(iid)
-        if key == ("route",):
-            self.start_place("New route: click the first waypoint on the map.",
-                             lambda x, z: self.add_route((x, z)), label="New route: click the first waypoint.")
-        elif key == ("waypoint",):
-            if not self.add_waypoint():
-                self.clear_obj_selection()
-        else:
-            name = self.obj_item_label(iid)
-            self.start_place(f"Click on the map to place: {name}.", lambda x, z: self.place_item(iid, x, z),
-                             repeat=True, label=f"Placing: {name}. Click on the map.")
-
-    def clear_obj_selection(self):
-        sel = self.obj_tree.selection()
-        if sel:
-            self._obj_select_quiet = True
-            try:
-                self.obj_tree.selection_remove(sel)
-                self.root.update_idletasks()
-            finally:
-                self.root.after_idle(lambda: setattr(self, "_obj_select_quiet", False))
-
     def place_selected_object(self):
         sel = self.obj_tree.selection()
         if not sel or (sel[0] not in self.obj_entries and sel[0] not in self.obj_templates):
             self.status("Select an object in the Objects pane first.", banner=True)
             return
-        if self.obj_templates.get(sel[0]) not in (("route",), ("waypoint",)):
-            self.end_place()
+        self.end_place()
+        if self.obj_templates.get(sel[0]) == ("route",):
+            self.add_route()
+            return
         self.place_item(sel[0], self.view.cx, self.view.cz)
 
     def on_obj_press(self, e):
@@ -1529,8 +1498,7 @@ class EditorApp:
         x = e.x_root - self.canvas.winfo_rootx()
         y = e.y_root - self.canvas.winfo_rooty()
         wx, wz = self.view.s2w(x, y)
-        if self.obj_templates.get(d["item"]) not in (("route",), ("waypoint",)):
-            self.end_place()
+        self.end_place()
         self.place_item(d["item"], wx, wz)
 
     TABLE_COLUMNS = {
@@ -2521,7 +2489,7 @@ class EditorApp:
         self.changed()
         note = f" {cleared} outside reference(s) were cleared." if cleared else ""
         self.status(f"Added '{m.name(root)}' from {self.library.source_label(entry)}. "
-                    f"Drag it into place.{note}", "ok", banner=True)
+                    f"Drag it into place.{note}", "ok")
 
     def changed(self, props=True):
         self.update_title()
@@ -2770,7 +2738,7 @@ class EditorApp:
         self.place_lbl.config(text=label or text)
         if not self.place_bar.winfo_ismapped():
             self.place_bar.pack(side="top", fill="x", padx=2, pady=(2, 0), before=self.obj_top)
-        self.status(text + " (Enter, Esc or right-click ends)", banner=True)
+        self.status(text + " (Enter, Esc or right-click ends)")
         self.draw_rubber()
 
     def end_place(self, text=None):
@@ -2780,8 +2748,6 @@ class EditorApp:
         self.canvas.delete("rubber")
         if getattr(self, "place_bar", None) is not None:
             self.place_bar.pack_forget()
-        if getattr(self, "obj_tree", None) is not None:
-            self.clear_obj_selection()
         if text and was:
             self.status(text)
 
