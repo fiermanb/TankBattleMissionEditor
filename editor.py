@@ -90,6 +90,7 @@ TOC_LAYERS = [
     ("Friendly", "Friendly", "triangle", COL_FRIEND, "Spawns"),
     ("Hostile", "Hostile", "triangle", COL_HOSTILE, "Spawns"),
     ("Waypoints", "Waypoints", "diamond", PACK_COLOURS[0], None),
+    ("Events", "Events", "event", None, None),
     ("Scenery", "Scenery", None, None, None),
 ] + [(cat, cat, "square", col, "Scenery") for cat, col in CATEGORY_COLOURS.items()] + [
     ("Terrain", "Terrain", "terrain", None, None),
@@ -99,6 +100,7 @@ TOC_DEFAULT_OFF = {"Deleted"}
 OBJ_HINT = ("Double-click an item to place it at the map centre, or drag it onto the map. New route: "
             "double-click or drag it, then click its waypoints; Finish, Enter, Esc or right-click ends.")
 DOUBLE_CLICK_MS = 400
+EVENT_MARK = 18
 
 TOOLS = ("select", "pan", "zoomin", "zoomout", "rotate")
 TOOL_CURSORS = {"select": "arrow", "pan": "fleur", "zoomin": "crosshair", "zoomout": "crosshair",
@@ -935,6 +937,9 @@ class EditorApp:
             "shows where the next waypoint joins. Right-click > Add here places at the pointer.\n"
             "Table Of Contents: click a check box to show or hide a layer; double-click a layer to open its "
             "table; right-click for Select all objects, Zoom to layer and Show only this layer.\n"
+            "Events are shown on the map with the symbol of their type (Events layer); events at the same "
+            "spot are laid out side by side. Their position only places the symbol: the game does not use "
+            "it.\n"
             "Insert: W adds a waypoint at the cursor to the selected route; Insert > Route starts a new route; "
             "Insert > Event... creates a new event or copies one from this or another mission.\n\n"
             "Tables: double-click a cell (or F2 for the name) to edit it; Enter applies, Esc cancels. "
@@ -1137,7 +1142,9 @@ class EditorApp:
         spec = next(l for l in TOC_LAYERS if l[0] == key)
         k = ("sym", key)
         if k not in self.toc_images:
-            self.toc_images[k] = ImageTk.PhotoImage(icons.swatch(spec[2], spec[3] or (0, 0, 0), self.icon_size))
+            img = (icons.event_icon(1, self.icon_size) if spec[2] == "event"
+                   else icons.swatch(spec[2], spec[3] or (0, 0, 0), self.icon_size))
+            self.toc_images[k] = ImageTk.PhotoImage(img)
         return self.toc_images[k]
 
     def build_toc_items(self, title="Layers"):
@@ -1164,6 +1171,8 @@ class EditorApp:
                     and (key == "Spawns" or self.spawn_side(e) == key)]
         if key == "Waypoints":
             return [m.go_of_tr[w] for w in m.waypoints if m.active(m.go_of_tr[w])]
+        if key == "Events":
+            return [m.event_go[e] for e in m.events if e not in m.spawns and m.active(m.event_go[e])]
         if key == "Scenery" or key in CATEGORY_COLOURS:
             roots = {m.object_root(g) for g in m.foot}
             return [g for g in roots if m.active(g) and (key == "Scenery" or category(m.name(g)) == key)]
@@ -1188,6 +1197,7 @@ class EditorApp:
                 else:
                     counts["Deleted"] += 1
             counts["Waypoints"] = sum(1 for w in m.waypoints if m.active(m.go_of_tr[w]))
+            counts["Events"] = sum(1 for e in m.events if e not in m.spawns and m.active(m.event_go[e]))
             for g in {m.object_root(g) for g in m.foot}:
                 if m.active(g):
                     counts[category(m.name(g))] += 1
@@ -1200,7 +1210,7 @@ class EditorApp:
             self.toc.item(k, text=f" {text}" + (f" ({n})" if n is not None else ""))
 
     LAYER_TABLES = {"Spawns": "spawns", "Player": "spawns", "Friendly": "spawns", "Hostile": "spawns",
-                    "Waypoints": "waypoints", "Scenery": "scenery", "Deleted": "spawns"}
+                    "Waypoints": "waypoints", "Events": "events", "Scenery": "scenery", "Deleted": "spawns"}
 
     def open_layer_table(self, key):
         page = self.LAYER_TABLES.get(key) or ("scenery" if key in CATEGORY_COLOURS else None)
@@ -2542,11 +2552,46 @@ class EditorApp:
             return False
         return self.layer("Deleted") or m.active(m.event_go[ev])
 
-    def movable(self, gos=None):
-        """Selected objects that can be moved / rotated / copied (no packs or
-        position-less events), without children of other selected objects."""
+    def event_visible(self, ev):
         m = self.model
-        gos = [g for g in (self.sel if gos is None else gos) if g in m.go and self.kind(g) in ("spawn", "waypoint", "object")]
+        if ev in m.spawns or not self.layer("Events"):
+            return False
+        return self.layer("Deleted") or m.active(m.event_go[ev])
+
+    def event_marks(self):
+        """{event GameObject: (screen x, screen y)} for the visible events.
+        Events at (nearly) the same spot, as in most shipped missions, are laid
+        out side by side so that each stays visible and clickable."""
+        m, v = self.model, self.view
+        out, used = {}, {}
+        for e in m.events:
+            if not self.event_visible(e):
+                continue
+            go = m.event_go[e]
+            p, _, _ = m.world(m.tr_of_go[go])
+            x, y = v.w2s(p[0], p[2])
+            cell = (round(x / EVENT_MARK), round(y / EVENT_MARK))
+            n = used.get(cell, 0)
+            used[cell] = n + 1
+            out[go] = (x + n * (EVENT_MARK + 2), y)
+        return out
+
+    def event_image(self, event_type, deleted=False):
+        key = ("mapevent", event_type, deleted)
+        if key not in self._images:
+            img = icons.event_icon(event_type, EVENT_MARK)
+            if deleted:
+                img = img.convert("LA").convert("RGBA")
+            self._images[key] = ImageTk.PhotoImage(img)
+        return self._images[key]
+
+    def movable(self, gos=None):
+        """Selected objects that can be moved / rotated / copied (no route packs),
+        without children of other selected objects. An event's position only
+        places its symbol on the map; the game does not use it."""
+        m = self.model
+        gos = [g for g in (self.sel if gos is None else gos)
+               if g in m.go and self.kind(g) in ("spawn", "waypoint", "object", "event")]
         chosen = set(gos)
         out = []
         for g in gos:
@@ -2689,7 +2734,7 @@ class EditorApp:
                         m.restore(go, cb["records"][go])
                         ng = go
                     else:
-                        ng = m.duplicate(go, offset=None)
+                        ng = m.duplicate(go, offset=None, mirror=kind == "spawn")
                         if not m.active(ng):
                             m.restore(ng)
                     m.move_to(m.tr_of_go[ng], tx + dx, tz + dz, follow)
@@ -3153,6 +3198,12 @@ class EditorApp:
         m = self.model
         show_hidden = self.layer("Deleted")
         best, bd = None, 1e9
+        for go, (x, y) in self.event_marks().items():
+            d = max(abs(x - sx), abs(y - sy))
+            if d <= EVENT_MARK // 2 + 1 and d < bd:
+                best, bd = go, d
+        if best is not None:
+            return best
         for e in m.spawns:
             if not self.spawn_visible(e):
                 continue
@@ -3634,9 +3685,20 @@ class EditorApp:
                 c.create_text(x + 12, y + 6, text=f"{m.name(go)}  {tank_display(t) if t else ''}",
                               anchor="nw", fill=col, font=MAP_FONT, tags="overlay")
 
+        for go, (x, y) in self.event_marks().items():
+            ev = m.event_of_go(go)
+            d = m.sc.read(ev)
+            c.create_image(x, y, image=self.event_image(d["Event_Type"], not m.active(go)), tags="overlay")
+            if go in self.sel:
+                h = EVENT_MARK // 2 + 3
+                c.create_rectangle(x - h, y - h, x + h, y + h, outline="#00FFFF", width=2, tags="overlay")
+            if v.scale > 0.9 or go == sel:
+                c.create_text(x + EVENT_MARK // 2 + 3, y + 4, text=m.name(go), anchor="nw", fill="#FFFFFF",
+                              font=MAP_FONT, tags="overlay")
+
         for g_sel in [g for g in self.sel if g in m.go]:
             trp = m.tr_of_go.get(g_sel)
-            if trp is None:
+            if trp is None or self.kind(g_sel) == "event":
                 continue
             for p in m.subtree(trp):
                 g = m.go_of_tr[p]
