@@ -911,6 +911,7 @@ class EditorApp:
                           ("Remove custom scenarios...", self.remove_custom)])
         menu("Windows", [("Table Of Contents", lambda: self.show_page("left", "toc"), "", "toc"),
                          ("Objects", lambda: self.show_page("left", "objects"), "", "objects"),
+                         ("Create", lambda: self.show_page("left", "create"), "", "addhost"),
                          ("Properties", lambda: self.show_page("right", "props"), "", "props"),
                          ("Catalog", lambda: self.show_page("right", "catalog"), "", "catalog"),
                          ("Spawns table", lambda: self.show_page("bottom", "spawns"), "", "table"),
@@ -925,12 +926,15 @@ class EditorApp:
             "the selection; Shift snaps to the step).\n\n"
             "Always: middle or right drag pans, the mouse wheel zooms.\n"
             "Alt + click selects a single part instead of the whole object.\n\n"
+            "Create pane: choose a template, then click on the map (repeatedly; Esc ends); double-click "
+            "places at the map centre. Right-click > Add here places at the pointer.
+"
             "Insert: W adds a waypoint at the cursor to the selected route; Insert > Route starts a new route "
             "(click its waypoints, Esc ends); "
             "Insert > Event... creates a new event or copies one from this or another mission.\n\n"
             "Tables: double-click a cell (or F2 for the name) to edit it; Enter applies, Esc cancels. "
-            "Deleted rows are shown when the Deleted objects layer is on. In the Waypoints table, Insert adds "
-            "a waypoint after the selected one. The Scenery table follows the scenery layers.\n\n"
+            "Deleted rows are shown when the Deleted objects layer is on. Insert adds a row: a tank of the "
+            "selected side, an event of the selected type, or a waypoint after the selected one. The Scenery table follows the scenery layers.\n\n"
             "Keys: Q / E rotate by the step (Shift: 1 deg), Del delete / restore, Ctrl+D duplicate, Ctrl+Z undo, "
             "Ctrl+S save, P select parent, F zoom to selection, Home full extent, Tab next spawn, "
             "L events list, T terrain follow, Esc clear selection."), parent=self.root)
@@ -976,6 +980,7 @@ class EditorApp:
         self.docks["left"] = DockArea(self.hpane, lambda: self.hide_dock("left"))
         self.build_toc(self.docks["left"].add_page("toc", "Table Of Contents", self.image("toc")))
         self.build_objects(self.docks["left"].add_page("objects", "Objects", self.image("objects")))
+        self.build_create(self.docks["left"].add_page("create", "Create", self.image("addhost")))
 
         self.vpane = tk.PanedWindow(self.hpane, orient="vertical", sashwidth=4, sashrelief="flat",
                                     bd=0, bg=FACE, opaqueresize=True)
@@ -1190,6 +1195,103 @@ class EditorApp:
         self.obj_tree.bind("<ButtonRelease-1>", self.on_obj_release, add="+")
         self.obj_entries = {}
 
+    def create_items(self):
+        """(group, label, icon, key) of the Create pane."""
+        items = [("Tanks", "Hostile tank", "addhost", ("spawn", 1)),
+                 ("Tanks", "Friendly tank", "addfriend", ("spawn", 0)),
+                 ("Routes", "New route", "addroute", ("route",)),
+                 ("Routes", "Waypoint (selected route)", "addwp", ("waypoint",))]
+        items += [("Events", name, "addevent", ("event", t)) for t, name in sorted(EVENT_TYPES.items()) if t != 0]
+        return items
+
+    def build_create(self, body):
+        hint = tk.Label(body, anchor="w", justify="left", fg="#404040", wraplength=250, text=(
+            "Choose a template, then click on the map (repeatedly; Esc ends). Double-click places at the "
+            "map centre; dragging onto the map also works."))
+        hint.pack(side="bottom", fill="x", padx=4, pady=2)
+        holder = bordered(body)
+        holder.pack(fill="both", expand=True, padx=2, pady=2)
+        t = ttk.Treeview(holder, show="tree", selectmode="browse")
+        sb = ttk.Scrollbar(holder, command=t.yview)
+        t.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        t.pack(side="left", fill="both", expand=True)
+        self.create_tree = t
+        self.create_keys = {}
+        groups = {}
+        for group, text, icon, key in self.create_items():
+            if group not in groups:
+                groups[group] = t.insert("", "end", text=" " + group, open=True)
+            iid = t.insert(groups[group], "end", text=" " + text, image=self.image(icon))
+            self.create_keys[iid] = key
+        t.bind("<<TreeviewSelect>>", lambda e: self.on_create_select())
+        t.bind("<Double-Button-1>", self.on_create_double)
+        t.bind("<ButtonRelease-1>", self.on_create_release, add="+")
+
+    def on_create_select(self):
+        sel = self.create_tree.selection()
+        key = self.create_keys.get(sel[0]) if sel else None
+        if key is None or not self.model:
+            return
+        if key == ("waypoint",) and not self.target_route():
+            self.status("Select a route, one of its waypoints, or a tank with a route first.", "warn", banner=True)
+            self.create_tree.selection_remove(sel)
+            return
+        text = self.create_tree.item(sel[0], "text").strip()
+        if key == ("route",):
+            self.start_place("Click the first waypoint of the new route.",
+                             lambda x, z: self.create_at(key, x, z))
+        else:
+            self.start_place(f"Click on the map to place: {text}.", lambda x, z: self.create_at(key, x, z),
+                             repeat=True)
+
+    def on_create_double(self, e):
+        key = self.create_keys.get(self.create_tree.identify_row(e.y))
+        if key is not None and self.model:
+            if key[0] != "route":
+                self.end_place()
+            self.create_at(key, self.view.cx, self.view.cz)
+        return "break"
+
+    def on_create_release(self, e):
+        key = self.create_keys.get(self.create_tree.identify_row(e.y)) if self.model else None
+        if key is None or self.root.winfo_containing(e.x_root, e.y_root) is not self.canvas:
+            return
+        x = e.x_root - self.canvas.winfo_rootx()
+        y = e.y_root - self.canvas.winfo_rooty()
+        if key[0] != "route":
+            self.end_place()
+        self.create_at(key, *self.view.s2w(x, y))
+
+    def create_at(self, key, x, z):
+        """Create the object of a Create pane template or 'Add here' entry at (x, z)."""
+        m = self.model
+        if not m:
+            return
+        if key[0] == "spawn":
+            self.add_spawn(key[1] == 1, at=(x, z))
+        elif key[0] == "route":
+            self.add_route((x, z))
+        elif key[0] == "waypoint":
+            self.add_waypoint((x, z))
+        elif key[0] == "event":
+            if self.library.entries is None:
+                self.library.load()
+
+            def do():
+                go = self.create_event(key[1])
+                m.move_to(m.tr_of_go[go], x, z, self.follow_var.get())
+                return go
+            self.busy("Creating the event...")
+            new = self.op("Add event", do)
+            self.idle()
+            if new is not None:
+                self.select(new)
+                self.show_page("right", "props")
+                tanks = m.sc.read(m.event_of_go(new))["Trigger_Type"] == 1
+                self.status(f"Added '{m.name(new)}'. Set its trigger and tanks in Properties." +
+                            (" A tank trigger without tanks fires at once." if tanks else ""), "ok", banner=True)
+
     def refresh_objects(self):
         t = self.obj_tree
         t.delete(*t.get_children())
@@ -1298,6 +1400,10 @@ class EditorApp:
         tv.bind("<F2>", lambda e, t=tv, k=kind: self.edit_cell(t, k, t.focus(), None))
         if kind == "waypoints":
             tv.bind("<Insert>", lambda e: self.insert_waypoint_after())
+        elif kind == "spawns":
+            tv.bind("<Insert>", lambda e: self.insert_spawn_row())
+        elif kind == "events":
+            tv.bind("<Insert>", lambda e: self.insert_event_row())
         if not hasattr(self, "tables"):
             self.tables = {}
         self.tables[kind] = tv
@@ -1405,6 +1511,33 @@ class EditorApp:
                 self.op("Scale", m.set_scale, trp, v / cur)
             return None, f"{cur:.2f}", scale
         return None
+
+    def insert_spawn_row(self):
+        """Insert in the Spawns table: a new tank of the selected tank's side
+        (friendly for the player), 10 m east of it; hostile when nothing is
+        selected."""
+        m = self.model
+        if not m:
+            return
+        ev = m.event_of_go(self.selected) if self.selected in m.go else None
+        if ev is None or ev not in m.spawns:
+            self.add_spawn(True)
+            return
+        d = m.sc.read(ev)
+        p = m.world(m.tr_of_go[self.selected])[0]
+        self.add_spawn(d["Relationship"] == 1 and d["Tank_ID"] != 1, at=(p[0] + 10, p[2]))
+
+    def insert_event_row(self):
+        """Insert in the Events table: a new event of the selected event's type,
+        or the Add event dialog when nothing is selected."""
+        m = self.model
+        if not m:
+            return
+        ev = m.event_of_go(self.selected) if self.selected in m.go else None
+        if ev is None or ev in m.spawns:
+            self.add_event()
+            return
+        self.create_at(("event", m.sc.read(ev)["Event_Type"]), self.view.cx, self.view.cz)
 
     def insert_waypoint_after(self):
         """Insert a waypoint after the selected one: halfway to the next waypoint,
@@ -2460,11 +2593,20 @@ class EditorApp:
 
     # ---- insert: waypoints, routes, events ------------------------------
 
-    def start_place(self, text, fn):
-        """Next left click on the map calls fn(x, z); Esc cancels."""
-        self.place = {"fn": fn}
+    def start_place(self, text, fn, repeat=False):
+        """Next left click on the map calls fn(x, z) (every click with repeat);
+        Esc ends."""
+        self.place = {"fn": fn, "repeat": repeat}
         self.canvas.config(cursor="crosshair")
-        self.status(text + " (Esc cancels)", banner=True)
+        self.status(text + (" (Esc ends)" if repeat else " (Esc cancels)"), banner=True)
+
+    def end_place(self, text=None):
+        self.place = None
+        self.canvas.config(cursor=TOOL_CURSORS[self.tool])
+        if getattr(self, "create_tree", None) is not None and self.create_tree.selection():
+            self.create_tree.selection_remove(self.create_tree.selection())
+        if text:
+            self.status(text)
 
     def target_route(self):
         """(route transform, waypoint to insert after or None) for the selection."""
@@ -2663,21 +2805,23 @@ class EditorApp:
         self.select_many(gos)
         self.status(f"Selected {len(gos)} {what}.")
 
-    def add_spawn(self, hostile):
+    def add_spawn(self, hostile, at=None):
+        """New AI tank of the given side at `at` (default: the view centre),
+        copied from a tank of that side (also a deleted one), else from any AI
+        tank, else from the player's spawn. Returns the new GameObject."""
         m = self.model
         if not m:
-            return
+            return None
         side = 1 if hostile else 0
         ai = [e for e in m.spawns if m.sc.read(e)["Tank_ID"] != 1]
         cands = ([e for e in ai if m.active(m.event_go[e]) and m.sc.read(e)["Relationship"] == side]
                  or [e for e in ai if m.sc.read(e)["Relationship"] == side]
-                 or ai)
+                 or ai or list(m.spawns))
         if not cands:
-            self.status("This mission has no AI tank spawn to use as a template. Copy one from another "
-                        "mission with Insert > Event.", "warn", banner=True)
-            return
+            self.status("This mission has no tank spawn at all to build a tank from.", "warn", banner=True)
+            return None
         go = m.event_go[cands[0]]
-        cx, cz = self.view.cx, self.view.cz
+        cx, cz = at if at is not None else (self.view.cx, self.view.cz)
 
         def do():
             new = m.copy_spawn(go, side)
@@ -2688,7 +2832,18 @@ class EditorApp:
         if new is not None:
             self.selected = new
             self.changed()
-            self.status(f"Added '{m.name(new)}' (copy of '{m.name(go)}') at the view centre.", "ok")
+            self.status(f"Added '{m.name(new)}' (copy of '{m.name(go)}').", "ok")
+        return new
+
+    def move_player_here(self, x, z):
+        m = self.model
+        player = next((e for e in m.spawns if m.sc.read(e)["Tank_ID"] == 1 and m.active(m.event_go[e])), None)
+        if player is None:
+            self.status("This mission has no player spawn.", "warn", banner=True)
+            return
+        go = m.event_go[player]
+        self.op("Move player", m.move_to, m.tr_of_go[go], x, z, self.follow_var.get())
+        self.select(go)
 
     def undo(self):
         if not self.model:
@@ -2854,9 +3009,11 @@ class EditorApp:
         if not self.model:
             return
         if self.place:
-            fn, self.place = self.place["fn"], None
-            self.canvas.config(cursor=TOOL_CURSORS[self.tool])
-            fn(*self.view.s2w(e.x, e.y))
+            place = self.place
+            if not place.get("repeat"):
+                self.place = None
+                self.canvas.config(cursor=TOOL_CURSORS[self.tool])
+            place["fn"](*self.view.s2w(e.x, e.y))
             return
         if self.tool == "pan":
             self.on_pan_start(e)
@@ -3044,6 +3201,21 @@ class EditorApp:
             text, cmd, acc, icon, enabled = en
             menu.add_command(label=text, command=cmd, accelerator=acc, compound="left",
                              image=self.image(icon) if icon else "", state="normal" if enabled else "disabled")
+        wx, wz = self.view.s2w(e.x, e.y)
+        add = tk.Menu(menu, tearoff=0)
+        events = tk.Menu(add, tearoff=0)
+        for group, text, icon, key in self.create_items():
+            target = events if group == "Events" else add
+            enabled = key != ("waypoint",) or bool(self.target_route())
+            target.add_command(label=text, compound="left", image=self.image(icon),
+                               state="normal" if enabled else "disabled",
+                               command=lambda k=key: self.create_at(k, wx, wz))
+            if key == ("waypoint",):
+                add.add_cascade(label="Event", menu=events, compound="left", image=self.image("addevent"))
+                add.add_separator()
+        add.add_command(label="Move player here", command=lambda: self.move_player_here(wx, wz))
+        menu.insert_cascade(0, label="Add here", menu=add, compound="left", image=self.image("addhost"))
+        menu.insert_separator(1)
         try:
             menu.tk_popup(e.x_root, e.y_root)
         finally:
@@ -3087,9 +3259,7 @@ class EditorApp:
             self.choose_scene()
         elif k == "escape":
             if self.place:
-                self.place = None
-                self.canvas.config(cursor=TOOL_CURSORS[self.tool])
-                self.status("Placement cancelled.")
+                self.end_place("Placement ended.")
             else:
                 self.select(None)
         elif k == "w":

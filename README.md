@@ -24,8 +24,9 @@ The editor finds the game in your Steam libraries or asks for its folder
   (allied groups); one tank or many at once.
 - Mission settings (nothing selected): fog, visibility, recon plane.
 - Objects pane: place objects from any mission (double-click or drag).
-- Insert waypoints (W at the cursor), routes and events (from this or another
-  mission); choose an event's trigger and affected tanks in Properties.
+- Create pane, or right-click > Add here: tanks, routes (click the
+  waypoints), waypoints and new events; Insert in a table adds a row. Events
+  can also be copied from another mission (Insert > Event).
 - Tables of spawns, events, waypoints and scenery: double-click a cell to
   edit it.
 - New scenarios from an existing mission or on an empty terrain (Scenario

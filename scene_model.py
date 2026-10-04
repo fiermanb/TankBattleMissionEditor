@@ -922,6 +922,8 @@ class SceneModel:
             self.set_field(new, "m_IsActive", True)
         if self.sc.read(ev)["Relationship"] != relationship:
             self.set_field(ev, "Relationship", relationship)
+        if self.sc.read(ev)["Tank_ID"] != 0:
+            self.set_field(ev, "Tank_ID", 0)
         self.drop_dead_refs(ev)
         return new
 
