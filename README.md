@@ -23,10 +23,12 @@ The editor finds the game in your Steam libraries or asks for its folder
 - Tank settings: type, side, AI behaviour, respawns, unit group, follow target
   (allied groups); one tank or many at once.
 - Mission settings (nothing selected): fog, visibility, recon plane.
-- Objects pane: place objects from any mission (double-click or drag).
-- Create pane, or right-click > Add here: tanks, routes (click the
-  waypoints), waypoints and new events; Insert in a table adds a row. Events
-  can also be copied from another mission (Insert > Event).
+- Objects pane: new tanks, routes, waypoints and events, and objects from any
+  mission. Click an item, then click on the map; Enter, Esc or right-click
+  finishes. Right-click > Add here places at the pointer; Insert in a table
+  adds a row.
+- Table Of Contents: layer counts; double-click opens the layer's table,
+  right-click selects, zooms or shows only that layer.
 - Tables of spawns, events, waypoints and scenery: double-click a cell to
   edit it.
 - New scenarios from an existing mission or on an empty terrain (Scenario

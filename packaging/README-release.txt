@@ -17,9 +17,11 @@ WHAT IT DOES
 - Move, rotate, add, copy and delete tanks, waypoints and scenery.
 - Tank settings: type, side, AI behaviour, respawns, unit group, follow target.
 - Mission settings (nothing selected): fog, visibility, recon plane.
-- Objects pane: place objects from any mission (double-click or drag).
-- Create pane, or right-click > Add here: tanks, routes, waypoints and new
-  events; Insert in a table adds a row.
+- Objects pane: new tanks, routes, waypoints and events, and objects from
+  any mission. Click an item, then click on the map; Enter, Esc or
+  right-click finishes. Right-click > Add here places at the pointer.
+- Table Of Contents: double-click opens a layer's table; right-click
+  selects, zooms or shows only that layer.
 - Tables of spawns, events, waypoints and scenery: double-click a cell to
   edit it.
 - New scenarios from a mission or on an empty terrain (Scenario menu); they
