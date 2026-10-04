@@ -64,15 +64,19 @@ Requires Python 3.11+ on Windows.
     python -m unittest discover tests     # tests (need the installed game)
     python packaging/build_exe.py         # standalone executable + release zip
 
-`.github/workflows/release.yml` builds and signs the executable on GitHub
-(SignPath Foundation).
+`.github/workflows/release.yml` builds the release on GitHub when a version tag
+is pushed. Code signing through the SignPath Foundation is planned.
 
-After a game update, refresh the script layouts and release a new version:
+## Maintenance
+
+The editor ships the field layouts of the game's scripts. After a game update,
+regenerate them and release a new version:
 
     pip install TypeTreeGeneratorAPI==0.0.10
     python packaging/generate_layouts.py  # writes layouts/tbc_layouts.json.gz
 
-Until then the editor refuses to edit objects whose scripts changed.
+Until a new version is released, the editor does not edit objects whose scripts
+changed in the update.
 
 ## Licence
 
