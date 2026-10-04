@@ -844,6 +844,54 @@ class SceneModel:
         if reindex:
             self.reindex()
 
+    def copy_spawn(self, go, relationship):
+        """New tank spawn copied from spawn GameObject `go`, which may be deleted:
+        the copy is active, has the given side and no references to deleted
+        objects or empty routes. Returns the new GameObject."""
+        new = self.duplicate(go, offset=None)
+        ev = self.event_of_go(new)
+        if not self.go[new]["m_IsActive"]:
+            self.set_field(new, "m_IsActive", True)
+        if self.sc.read(ev)["Relationship"] != relationship:
+            self.set_field(ev, "Relationship", relationship)
+        self.drop_dead_refs(ev)
+        return new
+
+    def drop_dead_refs(self, ev):
+        """Clear the references of event `ev` to deleted (inactive) objects and to
+        routes without waypoints, for example after copying a deleted spawn."""
+        owner = {c: g for g, comps in self.comps.items() for c in comps}
+
+        def dead(pid):
+            g = pid if pid in self.go else self.go_of_tr.get(pid, owner.get(pid))
+            return g is not None and not self.active(g)
+
+        d = self.edit(ev)
+        changed = False
+        for lst, count in REF_LISTS.items():
+            items = d.get(lst) or []
+            keep = [r for r in items if r["m_FileID"] != 0 or not dead(r["m_PathID"])]
+            if len(keep) != len(items):
+                if d.get(count) == len(items):
+                    d[count] = len(keep)
+                d[lst] = keep
+                changed = True
+        for f in REF_SINGLES:
+            r = d.get(f)
+            if r and r["m_FileID"] == 0 and r["m_PathID"] and dead(r["m_PathID"]):
+                d[f] = {"m_FileID": 0, "m_PathID": 0}
+                changed = True
+        for f in PACK_FIELDS:
+            r = d.get(f)
+            if r and r["m_FileID"] == 0 and r["m_PathID"]:
+                trp = self.pack_tr(r["m_PathID"])
+                if not trp or not self.tr[trp]["m_Children"]:
+                    d[f] = {"m_FileID": 0, "m_PathID": 0}
+                    changed = True
+        if changed:
+            self._set(ev, d)
+        return changed
+
     def clear_to_terrain(self):
         """Reduce the scene to its terrain: deactivate all scenery, AI tank spawns,
         mission events and unused waypoints. Kept are the game systems, light,

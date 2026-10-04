@@ -175,6 +175,17 @@ class SceneModelTest(unittest.TestCase):
             for pid in m.sc.changed:
                 self.assertEqual(sc2.read(pid), m.sc.read(pid))
 
+        deleted = next(e for e in m.spawns if not m.active(m.event_go[e]) and m.sc.read(e)["Tank_ID"] != 1)
+        m.begin("add")
+        new = m.copy_spawn(m.event_go[deleted], 1)
+        m.commit()
+        ev = m.event_of_go(new)
+        self.assertTrue(m.active(new))
+        self.assertEqual(m.sc.read(ev)["Relationship"], 1)
+        self.assertFalse(m.drop_dead_refs(ev), "no references to deleted objects remain")
+        self.check_integrity(m)
+
+        m.undo()
         m.undo()
         self.assertEqual(m.sc.build(), m.sc.raw)
 

@@ -922,6 +922,8 @@ class EditorApp:
             "Alt + click selects a single part instead of the whole object.\n\n"
             "Insert: W adds a waypoint at the cursor to the selected route; Insert > Route copies a route; "
             "Insert > Event... copies an event from this or another mission.\n\n"
+            "Tables: double-click a cell (or F2 for the name) to edit it; Enter applies, Esc cancels. "
+            "Deleted rows are shown when the Deleted objects layer is on.\n\n"
             "Keys: Q / E rotate by the step (Shift: 1 deg), Del delete / restore, Ctrl+D duplicate, Ctrl+Z undo, "
             "Ctrl+S save, P select parent, F zoom to selection, Home full extent, Tab next spawn, "
             "L events list, T terrain follow, Esc clear selection."), parent=self.root)
@@ -1276,11 +1278,158 @@ class EditorApp:
         xs.pack(side="bottom", fill="x")
         tv.pack(side="left", fill="both", expand=True)
         tv.bind("<<TreeviewSelect>>", lambda e, t=tv: self.on_table_select(t))
-        tv.bind("<Double-Button-1>", lambda e: self.frame_selection())
+        tv.bind("<Double-Button-1>", lambda e, t=tv, k=kind: self.on_table_double(t, k, e))
+        tv.bind("<F2>", lambda e, t=tv, k=kind: self.edit_cell(t, k, t.focus(), None))
         if not hasattr(self, "tables"):
             self.tables = {}
         self.tables[kind] = tv
         self.table_counts = getattr(self, "table_counts", {})
+
+    def on_table_double(self, tv, kind, e):
+        if tv.identify_region(e.x, e.y) != "cell":
+            return None
+        if not self.edit_cell(tv, kind, tv.identify_row(e.y), tv.identify_column(e.x)):
+            self.frame_selection()
+        return "break"
+
+    def cell_spec(self, kind, go, key):
+        """How a table cell is edited: (choices, current, commit), with choices a
+        list of (label, value) for a fixed choice, ("free", [labels]) for text
+        with suggestions, None for plain text, or a callable that opens a
+        dialog. Returns None when the cell cannot be edited."""
+        m = self.model
+        ev = m.event_of_go(go)
+        if ev is None:
+            return None
+        d = m.sc.read(ev)
+        trp = m.tr_of_go[go]
+
+        def field(k, conv=str):
+            return lambda v: self.op(f"Set {k}", m.set_field, ev, k, conv(v))
+
+        def enum(table):
+            return [(str(table[k]), k) for k in sorted(table)]
+
+        def move(axis):
+            def commit(v):
+                p = m.world(trp)[0]
+                x, z = (float(v), p[2]) if axis == 0 else (p[0], float(v))
+                self.op("Move", m.move_to, trp, x, z, self.follow_var.get())
+            return commit
+
+        if key == "name":
+            return None, m.name(go), lambda v: self.op("Rename", m.rename, go, v)
+        if key == "trigger":
+            return enum(TRIGGER_TYPES), d["Trigger_Type"], field("Trigger_Type", int)
+        if key == "time":
+            return None, f"{d['Trigger_Time']:g}", field("Trigger_Time", float)
+        if kind == "spawns":
+            p, r, _ = m.world(trp)
+            if key == "group":
+                groups = sorted({m.sc.read(e)["Key_Name"] for e in m.spawns} - {""})
+                return ("free", groups), d["Key_Name"], field("Key_Name")
+            if key == "side":
+                return enum(RELATIONSHIPS), d["Relationship"], field("Relationship", int)
+            if key == "tank":
+                cur = m.tank_entry(ev)
+                return ([(tank_display(t), i) for i, t in enumerate(m.tanks)],
+                        m.tanks.index(cur) if cur in m.tanks else None,
+                        lambda i: self.op("Set tank", m.set_tank, ev, m.tanks[i]))
+            if key in ("x", "z"):
+                axis = 0 if key == "x" else 2
+                return None, f"{p[axis]:.1f}", move(axis)
+            if key == "heading":
+                return None, f"{heading_of(r):.0f}", lambda v: self.op("Rotate", m.set_heading, trp, float(v))
+            if key == "respawn":
+                return None, str(d["Respawn_Times"]), field("Respawn_Times", int)
+            if key == "target":
+                return [("yes", True), ("no", False)], bool(d["Is_Mission_Target"]), field("Is_Mission_Target", bool)
+        else:
+            if key == "type":
+                return enum(EVENT_TYPES), d["Event_Type"], field("Event_Type", int)
+            if key == "tanks":
+                return lambda: self.choose_tanks(ev, "Trigger_Tanks", "Trigger_Num", "Trigger tanks"), None, None
+            if key == "message":
+                return None, d["Event_Message"], field("Event_Message")
+        return None
+
+    def edit_cell(self, tv, kind, iid, col):
+        """Edit one table cell in place (double-click, or F2 for the name).
+        Enter or leaving the cell applies, Escape cancels. Returns False when
+        the cell is not editable."""
+        if not iid or not self.model:
+            return False
+        col = col or "#1"
+        keys = [c[0] for c in self.TABLE_COLUMNS[kind]]
+        idx = int(col[1:]) - 1
+        if not 0 <= idx < len(keys):
+            return False
+        spec = self.cell_spec(kind, int(iid), keys[idx])
+        if spec is None:
+            return False
+        choices, current, commit = spec
+        if callable(choices):
+            choices()
+            return True
+        tv.see(iid)
+        box = tv.bbox(iid, col)
+        if not box:
+            return False
+        x, y, w, h = box
+        fixed = isinstance(choices, list)
+        if fixed:
+            labels = [c[0] for c in choices]
+            widget = ttk.Combobox(tv, values=labels, state="readonly")
+            values = [c[1] for c in choices]
+            if current in values:
+                widget.current(values.index(current))
+        elif choices is not None:
+            widget = ttk.Combobox(tv, values=choices[1])
+            widget.set(current)
+        else:
+            widget = ttk.Entry(tv)
+            widget.insert(0, current)
+            widget.select_range(0, "end")
+        widget.place(x=x, y=y, width=max(w, 90), height=h)
+        widget.focus_set()
+        done = []
+
+        def finish(apply):
+            if done or not widget.winfo_exists():
+                return
+            done.append(True)
+            text = widget.get()
+            widget.destroy()
+            tv.focus_set()
+            if not apply:
+                return
+            if fixed:
+                if text not in labels:
+                    return
+                value = choices[labels.index(text)][1]
+            else:
+                value = text.strip() if choices is not None else text
+            if value == current:
+                return
+            try:
+                commit(value)
+            except ValueError:
+                self.status(f"Not a valid value: '{text}'.", "warn")
+
+        def on_blur(e):
+            def check():
+                focus = str(self.root.tk.call("focus"))
+                if not focus.startswith(str(widget)):
+                    finish(not fixed)
+            widget.after(150, check)
+
+        widget.bind("<Return>", lambda e: finish(True))
+        widget.bind("<KP_Enter>", lambda e: finish(True))
+        widget.bind("<Escape>", lambda e: (finish(False), "break")[1])
+        widget.bind("<FocusOut>", on_blur)
+        if fixed:
+            widget.bind("<<ComboboxSelected>>", lambda e: finish(True))
+        return True
 
     def sort_table(self, tv, key):
         rows = [(tv.set(i, key), i) for i in tv.get_children("")]
@@ -1304,9 +1453,12 @@ class EditorApp:
             tv.delete(*tv.get_children())
         if not m:
             return
+        show_deleted = self.layer("Deleted")
         for e in m.spawns:
             d = m.sc.read(e)
             go = m.event_go[e]
+            if not show_deleted and not m.active(go):
+                continue
             p, r, _ = m.world(m.tr_of_go[go])
             t = m.tank_entry(e)
             self.tables["spawns"].insert("", "end", iid=str(go), values=(
@@ -1320,6 +1472,8 @@ class EditorApp:
                 continue
             d = m.sc.read(e)
             go = m.event_go[e]
+            if not show_deleted and not m.active(go):
+                continue
             self.tables["events"].insert("", "end", iid=str(go), values=(
                 m.name(go), EVENT_TYPES.get(d["Event_Type"], d["Event_Type"]),
                 TRIGGER_TYPES.get(d["Trigger_Type"], d["Trigger_Type"]), f"{d['Trigger_Time']:g}",
@@ -1486,6 +1640,7 @@ class EditorApp:
     def layers_changed(self):
         self._base_key = None
         self._scenery_cache = (None, None)
+        self.refresh_tables()
         self.request_render()
 
     def layer(self, name):
@@ -2357,17 +2512,20 @@ class EditorApp:
         m = self.model
         if not m:
             return
-        cands = [e for e in m.spawns if m.active(m.event_go[e])
-                 and m.sc.read(e)["Relationship"] == (1 if hostile else 0)
-                 and m.sc.read(e)["Tank_ID"] != 1]
+        side = 1 if hostile else 0
+        ai = [e for e in m.spawns if m.sc.read(e)["Tank_ID"] != 1]
+        cands = ([e for e in ai if m.active(m.event_go[e]) and m.sc.read(e)["Relationship"] == side]
+                 or [e for e in ai if m.sc.read(e)["Relationship"] == side]
+                 or ai)
         if not cands:
-            self.status("No existing spawn of that side to use as a template.", "warn", banner=True)
+            self.status("This mission has no AI tank spawn to use as a template. Copy one from another "
+                        "mission with Insert > Event.", "warn", banner=True)
             return
         go = m.event_go[cands[0]]
         cx, cz = self.view.cx, self.view.cz
 
         def do():
-            new = m.duplicate(go, offset=None)
+            new = m.copy_spawn(go, side)
             m.move_to(m.tr_of_go[new], cx, cz, self.follow_var.get())
             return new
 

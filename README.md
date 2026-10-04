@@ -26,8 +26,10 @@ The editor finds the game in your Steam libraries or asks for its folder
 - Objects pane: place objects from any mission (double-click or drag).
 - Insert waypoints (W at the cursor), routes and events (from this or another
   mission); choose an event's trigger and affected tanks in Properties.
+- Spawns and Events tables: double-click a cell to edit it.
 - New scenarios from an existing mission or on an empty terrain (Scenario
-  menu); they appear on a "Custom Missions" page in the game. The briefing screen is updated on save.
+  menu); they appear on a "Custom Missions" page in the game. The briefing
+  screen is updated on save.
 
 ## Controls
 
