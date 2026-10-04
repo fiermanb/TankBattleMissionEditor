@@ -56,6 +56,7 @@ REF_SINGLES = (
 PACK_FIELDS = ("WayPoint_Pack", "New_WayPoint_Pack", "Respawn_Point_Pack", "New_Respawn_Point_Pack")
 
 DUPLICATE_OFFSET = 8.0
+HOLE_MARGIN = 2.0
 SYSTEM_ROOT_NAMES = ("game_controller",)
 SUFFIX_RE = re.compile(r"( \(\d+\))+$")
 
@@ -201,7 +202,20 @@ class Terrain:
         self.origin = world_pos
         h = np.asarray(hm["m_Heights"], dtype=np.float32).reshape(self.res, self.res)
         self.heights = h / 32766.0 * scale[1] + world_pos[1]
+        self.holes = self._hole_points(hm.get("m_Holes"))
         self.image = self._colour(ctx, sf, td["m_SplatDatabase"]) if colour else None
+
+    def _hole_points(self, raw):
+        """World (x, z) centres of the cells cut out of the terrain."""
+        if raw is None or not len(raw):
+            return np.zeros((0, 2))
+        mask = np.frombuffer(bytes(raw), dtype=np.uint8) if isinstance(raw, (bytes, bytearray)) else np.asarray(raw)
+        n = int(round(len(mask) ** 0.5))
+        if n * n != len(mask):
+            return np.zeros((0, 2))
+        rows, cols = np.nonzero(mask.reshape(n, n) == 0)
+        return np.column_stack((self.origin[0] + (cols + 0.5) * self.size_x / n,
+                                self.origin[2] + (rows + 0.5) * self.size_z / n))
 
     def _colour(self, ctx, sf, splat):
         def deref(file, p):
@@ -829,6 +843,80 @@ class SceneModel:
         self._set(go, d)
         if reindex:
             self.reindex()
+
+    def clear_to_terrain(self):
+        """Reduce the scene to its terrain: deactivate all scenery, AI tank spawns,
+        mission events and unused waypoints. Kept are the game systems, light,
+        terrain, navigation mesh, the player's spawn, the 'mission failed'
+        events that trigger on the player's destruction, and objects over holes
+        in the terrain (tunnels), which would otherwise leave open pits. Call inside
+        begin()/commit(). Returns (events, waypoints, objects) removed."""
+        sc = self.sc
+        keep = {e for e in self.spawns
+                if sc.read(e)["Tank_ID"] == 1 and self.active(self.event_go[e])}
+        player = {self.event_go[e] for e in keep}
+        player |= {self.tr_of_go[g] for g in player if g in self.tr_of_go}
+        for e in self.events:
+            d = sc.read(e)
+            refs = [r["m_PathID"] for r in d.get("Trigger_Tanks") or [] if r["m_FileID"] == 0]
+            if d["Event_Type"] == 11 and d["Trigger_Type"] == 1 and refs and all(r in player for r in refs):
+                keep.add(e)
+        removed = [e for e in self.events if e not in keep and self.active(self.event_go[e])]
+        for e in removed:
+            self.delete(self.event_go[e], reindex=False)
+
+        used_packs = set()
+        for e in keep:
+            d = sc.read(e)
+            for f in PACK_FIELDS:
+                p = d.get(f)
+                if p and p["m_FileID"] == 0:
+                    used_packs.add(self.pack_tr(p["m_PathID"]))
+        points = [w for w, p in self.waypoints.items() if p not in used_packs]
+        for w in points:
+            self.delete(self.go_of_tr[w], reindex=False)
+
+        holes = self.terrain.holes if self.terrain is not None else np.zeros((0, 2))
+        covering = set()
+        for g, corners in self.foot.items():
+            if len(holes) and self.active(g):
+                lo, hi = corners.min(0) - HOLE_MARGIN, corners.max(0) + HOLE_MARGIN
+                if np.any(np.all((holes >= lo) & (holes <= hi), axis=1)):
+                    covering.add(self.object_root(g))
+        needed = set()
+        for g in covering:
+            while g is not None and g not in needed:
+                needed.add(g)
+                g = self.parent_go(g)
+
+        objects = 0
+
+        def prune(g):
+            nonlocal objects
+            if g in covering or not self.go[g]["m_IsActive"]:
+                return
+            if g in needed:
+                for c in self.tr[self.tr_of_go[g]]["m_Children"]:
+                    if self.go_of_tr.get(c["m_PathID"]) is not None:
+                        prune(self.go_of_tr[c["m_PathID"]])
+                return
+            nd = self.edit(g)
+            nd["m_IsActive"] = False
+            self._set(g, nd)
+            objects += 1
+
+        keep_roots = self.system_roots() | {self.top_level(self.event_go[e]) for e in keep}
+        keep_roots |= {self.go_of_tr[p] for p in self.packs}
+        for g in list(self.go):
+            if self.parent_go(g) is not None or g in keep_roots:
+                continue
+            kinds = {sc.type_name(c) if sc.type_name(c) != "MonoBehaviour" else self.script_class(c)
+                     for c in self.comps.get(g, [])}
+            if kinds & {"Terrain", "Light", "NavMeshSurface", "Game_Controller_CS"}:
+                continue
+            prune(g)
+        self.reindex()
+        return len(removed), len(points), objects
 
     def assign_pack(self, ev, pack_tr):
         d = self.edit(ev)

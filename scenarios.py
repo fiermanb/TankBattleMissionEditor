@@ -65,6 +65,7 @@ class ScenarioManager:
         self.shared_dir = os.path.join(backup_dir, "shared")
         self.manifest_path = os.path.join(backup_dir, "scenarios.json")
         self.manifest = self._load_manifest()
+        self._terrains = None
 
     # ---- manifest ----------------------------------------------------
 
@@ -109,6 +110,49 @@ class ScenarioManager:
             if os.path.splitext(os.path.basename(path))[0] == name:
                 return i
         return None
+
+    def terrains(self):
+        """The distinct terrains of the original missions, for starting a scenario
+        on an empty map: [(label, template mission pid)]. The template is the
+        mission with the fewest scripts on that terrain; tutorials and custom
+        scenarios are not used as templates."""
+        if self._terrains is not None:
+            return self._terrains
+        ctx = self.ctx
+        custom = {c["scene_id"] for c in self.manifest["scenarios"]}
+        groups = {}
+        for pid, d in self.missions():
+            idx = self.scene_index(d["Battle_Scene_Name"])
+            if idx is None:
+                continue
+            sc = SceneFile(ctx, ctx.scene_path(idx))
+            tpid = next((p for p in sc.all_pids() if sc.type_name(p) == "Terrain"), None)
+            if tpid is None:
+                continue
+            ref = sc.read(tpid)["m_TerrainData"]
+            if not ref["m_FileID"]:
+                continue
+            key = (sc.externals[ref["m_FileID"] - 1], ref["m_PathID"])
+            g = groups.setdefault(key, {"missions": 0, "best": None})
+            g["missions"] += 1
+            name = (d["Scene_Title"] + " " + d["Battle_Scene_Name"]).lower()
+            if d["Scene_ID"] in custom or "tutorial" in name or "turotial" in name:
+                continue
+            scripts = sum(1 for p in sc.all_pids() if sc.type_name(p) == "MonoBehaviour")
+            if g["best"] is None or scripts < g["best"][0]:
+                g["best"] = (scripts, pid, d["Scene_Title"])
+        out = []
+        for (file, tpid), g in groups.items():
+            if g["best"] is None:
+                continue
+            try:
+                tname = ctx.external(file).objects[tpid].peek_name()
+            except Exception:
+                tname = "Terrain"
+            tname = re.sub(r"^Terrain[_ ]*", "", tname).replace("_", " ").strip("() ") or "Terrain"
+            out.append((f"{tname}   (as in '{g['best'][2]}', {g['missions']} missions)", g["best"][1]))
+        self._terrains = sorted(out)
+        return self._terrains
 
     # ---- backups -----------------------------------------------------
 
@@ -451,3 +495,4 @@ class ScenarioManager:
     def _refresh_context(self):
         self.ctx.reload_build_settings()
         self.ctx._external_cache.pop(MISSION_ASSETS, None)
+        self._terrains = None

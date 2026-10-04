@@ -151,6 +151,33 @@ class SceneModelTest(unittest.TestCase):
             m.undo()
         self.assertEqual(m.sc.build(), m.sc.raw)
 
+    def test_clear_to_terrain(self):
+        m = SceneModel(self.ctx, SCENE, terrain="heights")
+        m.begin("empty")
+        m.clear_to_terrain()
+        m.commit()
+        self.check_integrity(m)
+        live = [e for e in m.events if m.active(m.event_go[e])]
+        spawns = [e for e in live if m.sc.read(e)["Event_Type"] == 0]
+        self.assertEqual([m.sc.read(e)["Tank_ID"] for e in spawns], [1], "only the player spawn stays")
+        self.assertTrue(all(m.sc.read(e)["Event_Type"] in (0, 11) for e in live))
+        holes = m.terrain.holes
+        for g in m.mesh_of_go:
+            if m.active(g) and g in m.foot and len(holes):
+                lo, hi = m.foot[g].min(0) - 50, m.foot[g].max(0) + 50
+                self.assertTrue(((holes >= lo) & (holes <= hi)).all(1).any(),
+                                f"{m.path(g)} is far from any terrain hole")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, f"level{SCENE}")
+            m.sc.save(out)
+            sc2 = SceneFile(self.ctx, out)
+            for pid in m.sc.changed:
+                self.assertEqual(sc2.read(pid), m.sc.read(pid))
+
+        m.undo()
+        self.assertEqual(m.sc.build(), m.sc.raw)
+
 
 if __name__ == "__main__":
     unittest.main()

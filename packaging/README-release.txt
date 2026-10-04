@@ -20,7 +20,8 @@ WHAT IT DOES
 - Objects pane: place objects from any mission (double-click or drag).
 - Insert waypoints (W at the cursor), routes and events; choose the tanks
   that trigger or are affected by an event.
-- New scenarios (Scenario menu); they appear on a "Custom Missions" page.
+- New scenarios from a mission or on an empty terrain (Scenario menu); they
+  appear on a "Custom Missions" page.
 
 CONTROLS
 --------

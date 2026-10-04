@@ -546,17 +546,41 @@ class ListDialog(Dialog):
 
 
 class TextFormDialog(Dialog):
-    """Title + multi-line briefing, optionally with a source mission choice."""
+    """Title + multi-line briefing, optionally with a source choice: a copy of a
+    mission, or (with terrains) an empty terrain. After run(), self.empty tells
+    which of the two was chosen."""
 
-    def __init__(self, parent, title, sources=None, title_text="", briefing=""):
+    def __init__(self, parent, title, sources=None, title_text="", briefing="", terrains=None):
         super().__init__(parent, title)
         self.sources = sources
+        self.terrains = terrains
+        self.empty = False
         r = 0
         if sources:
-            tk.Label(self.body, text="Copy from mission:", anchor="w").grid(row=r, column=0, sticky="w", pady=2)
+            self.mode = tk.StringVar(value="copy")
+            if terrains:
+                ttk.Radiobutton(self.body, text="Copy of mission:", variable=self.mode, value="copy").grid(
+                    row=r, column=0, sticky="w", pady=2)
+            else:
+                tk.Label(self.body, text="Copy from mission:", anchor="w").grid(row=r, column=0, sticky="w", pady=2)
             self.src = ttk.Combobox(self.body, state="readonly", width=60, values=[s[0] for s in sources])
             self.src.current(0)
             self.src.grid(row=r, column=1, sticky="ew", pady=2)
+            self.src.bind("<<ComboboxSelected>>", lambda e: self.mode.set("copy"))
+            r += 1
+        if sources and terrains:
+            ttk.Radiobutton(self.body, text="Empty terrain:", variable=self.mode, value="empty").grid(
+                row=r, column=0, sticky="w", pady=2)
+            self.ter = ttk.Combobox(self.body, state="readonly", width=60, values=[t[0] for t in terrains])
+            self.ter.current(0)
+            self.ter.grid(row=r, column=1, sticky="ew", pady=2)
+            self.ter.bind("<<ComboboxSelected>>", lambda e: self.mode.set("empty"))
+            r += 1
+            tk.Label(self.body, anchor="w", justify="left", fg="#555555", wraplength=430,
+                     text="An empty terrain keeps only the player tank and the 'player destroyed' "
+                          "event; objects over tunnels stay. Add enemies and a 'Mission complete' "
+                          "event yourself. AI navigation still avoids the removed buildings.").grid(
+                row=r, column=1, sticky="w", pady=(0, 4))
             r += 1
         tk.Label(self.body, text="Title:", anchor="w").grid(row=r, column=0, sticky="w", pady=2)
         self.title_var = tk.StringVar(value=title_text)
@@ -579,6 +603,9 @@ class TextFormDialog(Dialog):
             raise ValueError("The title is empty.")
         b = self.text.get("1.0", "end").strip()
         src = self.sources[self.src.current()][1] if self.sources else None
+        if self.terrains and self.mode.get() == "empty":
+            self.empty = True
+            src = self.terrains[self.ter.current()][1]
         return src, t, b
 
 
@@ -1666,8 +1693,15 @@ class EditorApp:
             self.status(f"Cannot read the mission list: {e}", "warn", banner=True)
             return
         sources = [(f"{d['Scene_Title']}   [{d['Battle_Scene_Name']}]", pid) for pid, d in missions]
-        res = TextFormDialog(self.root, "New scenario", sources=sources,
-                             briefing="Objective: Destroy all enemy units.").run()
+        self.busy("Reading the terrains...")
+        try:
+            terrains = self.scenarios.terrains()
+        except Exception:
+            terrains = []
+        self.idle()
+        dlg = TextFormDialog(self.root, "New scenario", sources=sources, terrains=terrains,
+                             briefing="Objective: Destroy all enemy units.")
+        res = dlg.run()
         if not res or not self.guard_unsaved():
             return
         pid, title, briefing = res
@@ -1684,6 +1718,12 @@ class EditorApp:
             return
         self.refresh_scenes()
         self.open_scene(battle_idx)
+        if dlg.empty and self.model and self.model.index == battle_idx:
+            self.busy("Clearing the terrain...")
+            cleared = self.op("Empty terrain", self.model.clear_to_terrain)
+            self.idle()
+            if cleared is None or not self.save():
+                return
         self.status(f"Created '{title}' (level{battle_idx}). It is on the 'Custom Missions' page "
                     "of the mission select screen.", "ok", banner=True)
 
