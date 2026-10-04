@@ -56,6 +56,7 @@ REF_SINGLES = (
 PACK_FIELDS = ("WayPoint_Pack", "New_WayPoint_Pack", "Respawn_Point_Pack", "New_Respawn_Point_Pack")
 
 DUPLICATE_OFFSET = 8.0
+SYSTEM_ROOT_NAMES = ("game_controller",)
 SUFFIX_RE = re.compile(r"( \(\d+\))+$")
 
 
@@ -348,10 +349,13 @@ class SceneModel:
         self.event_trs = {self.tr_of_go[g] for g in self.event_go.values() if g in self.tr_of_go}
 
         self.mesh_of_go = {}
+        system = self.system_roots()
         for pid, d in mesh_filters.items():
             g = d["m_GameObject"]["m_PathID"]
             trp = self.tr_of_go.get(g)
             if trp is None or trp in self.rect or trp in self.waypoints:
+                continue
+            if self.top_level(g) in system:
                 continue
             self.mesh_of_go[g] = d["m_Mesh"]
         self._wcache = {}
@@ -367,6 +371,20 @@ class SceneModel:
     def spawn_pack(self, ev):
         """Transform pid of a spawn's waypoint pack, or 0."""
         return self.pack_tr(self.sc.read(ev)["WayPoint_Pack"]["m_PathID"])
+
+    def top_level(self, go):
+        g = go
+        while True:
+            p = self.parent_go(g)
+            if p is None:
+                return g
+            g = p
+
+    def system_roots(self):
+        """Root objects of the game's internal systems (cameras, user interface,
+        the recon plane model of the map camera): not scenery, so not shown."""
+        return {g for g, d in self.go.items()
+                if any(k in d["m_Name"].lower() for k in SYSTEM_ROOT_NAMES) and self.parent_go(g) is None}
 
     def script_class(self, pid):
         if pid not in self._class_cache:
