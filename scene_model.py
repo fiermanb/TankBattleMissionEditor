@@ -920,9 +920,13 @@ class SceneModel:
         ev = self.event_of_go(new)
         if not self.go[new]["m_IsActive"]:
             self.set_field(new, "m_IsActive", True)
-        if self.sc.read(ev)["Relationship"] != relationship:
+        d = self.sc.read(ev)
+        if d["Relationship"] != relationship or d["Tank_ID"] != 0:
+            groups = [self.sc.read(e)["Key_Name"] for e in self.spawns if e != ev
+                      and self.sc.read(e)["Relationship"] == relationship and self.sc.read(e)["Tank_ID"] == 0]
+            groups = [g for g in groups if g]
+            self.set_field(ev, "Key_Name", groups[0] if groups else ("Enemy A" if relationship == 1 else "Friend A"))
             self.set_field(ev, "Relationship", relationship)
-        if self.sc.read(ev)["Tank_ID"] != 0:
             self.set_field(ev, "Tank_ID", 0)
         self.drop_dead_refs(ev)
         return new

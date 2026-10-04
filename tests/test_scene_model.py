@@ -211,6 +211,14 @@ class SceneModelTest(unittest.TestCase):
         ev = m.event_of_go(new)
         self.assertTrue(m.active(new))
         self.assertEqual(m.sc.read(ev)["Relationship"], 1)
+        m.begin("other side")
+        friend = m.copy_spawn(new, 0)
+        m.commit()
+        key = m.sc.read(m.event_of_go(friend))["Key_Name"]
+        friendly_keys = {m.sc.read(e)["Key_Name"] for e in m.spawns
+                         if m.sc.read(e)["Relationship"] == 0 and m.sc.read(e)["Tank_ID"] == 0} - {""}
+        self.assertTrue(key in friendly_keys or key == "Friend A", key)
+        m.undo()
         self.assertFalse(m.drop_dead_refs(ev), "no references to deleted objects remain")
         self.check_integrity(m)
 

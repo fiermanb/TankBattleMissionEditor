@@ -927,14 +927,14 @@ class EditorApp:
             "Always: middle or right drag pans, the mouse wheel zooms.\n"
             "Alt + click selects a single part instead of the whole object.\n\n"
             "Create pane: choose a template, then click on the map (repeatedly; Esc ends); double-click "
-            "places at the map centre. Right-click > Add here places at the pointer.
-"
+            "places at the map centre. Right-click > Add here places at the pointer.\n"
             "Insert: W adds a waypoint at the cursor to the selected route; Insert > Route starts a new route "
             "(click its waypoints, Esc ends); "
             "Insert > Event... creates a new event or copies one from this or another mission.\n\n"
             "Tables: double-click a cell (or F2 for the name) to edit it; Enter applies, Esc cancels. "
             "Deleted rows are shown when the Deleted objects layer is on. Insert adds a row: a tank of the "
-            "selected side, an event of the selected type, or a waypoint after the selected one. The Scenery table follows the scenery layers.\n\n"
+            "selected side, an event of the selected type, or a waypoint after the selected one. "
+            "The Scenery table follows the scenery layers.\n\n"
             "Keys: Q / E rotate by the step (Shift: 1 deg), Del delete / restore, Ctrl+D duplicate, Ctrl+Z undo, "
             "Ctrl+S save, P select parent, F zoom to selection, Home full extent, Tab next spawn, "
             "L events list, T terrain follow, Esc clear selection."), parent=self.root)
