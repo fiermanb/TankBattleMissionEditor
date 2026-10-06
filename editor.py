@@ -31,6 +31,7 @@ import icons
 import settings
 from version import APP_NAME, COPYRIGHT, __version__
 from briefing_sync import sync_mission
+from scenario_backup import ScenarioBackups
 from object_import import ObjectLibrary, base_name, category, import_object, reconnect_event_refs
 from scenarios import ScenarioManager
 from scene_io import GameContext
@@ -762,6 +763,68 @@ class EditorApp:
         else:
             self.status("Double-click a mission in the Catalog, or use File > Open mission.")
 
+    def backup_scenario(self, battle_index):
+        """Back up the custom scenario with this battle scene (after saves and
+        changes), so that a game update cannot delete it for good."""
+        entry = next((s for s in self.scenarios.custom if s["battle_index"] == battle_index), None)
+        if entry is None:
+            return
+        try:
+            self.backups.backup(entry)
+        except Exception as e:
+            self.status(f"Backing up '{entry['title']}' failed: {e}", "warn", banner=True)
+
+    def backup_unprotected(self):
+        """Back up custom scenarios that have no backup yet (made with an older
+        editor version)."""
+        have = {b["scene_id"] for b in self.backups.list()}
+        todo = [s for s in self.scenarios.custom if s["scene_id"] not in have]
+        for s in todo:
+            self.busy(f"Backing up scenario '{s['title']}'...", banner=False)
+            self.backup_scenario(s["battle_index"])
+        if todo:
+            self.idle()
+            self.status(f"Backed up {len(todo)} custom scenario(s); a game update can no longer remove them for good.",
+                        "ok")
+
+    def restore_backups(self, items=None):
+        """Restore backed-up scenarios that are not in the game (after a game
+        update, or after removing them). items: backup metadata to restore;
+        None asks which."""
+        if not self.ctx:
+            return
+        missing = self.backups.missing()
+        if items is None:
+            if not missing:
+                self.status("All backed-up scenarios are in the game; there is nothing to restore.", banner=True)
+                return
+            choices = [(f"All {len(missing)} scenario(s)", missing, "#006000")] if len(missing) > 1 else []
+            choices += [(f"{b['title']:<30} saved {b.get('saved', '?').replace('T', ' ')}", [b]) for b in missing]
+            items = ListDialog(self.root, "Restore scenarios", choices, prompt=(
+                "These scenarios are backed up but not in the game. A restored scenario is converted to the "
+                "installed game version and appears on the 'Custom Missions' page again.")).run()
+            if not items:
+                return
+        if not self.guard_unsaved():
+            return
+        done, lines = [], []
+        for b in items:
+            self.busy(f"Restoring scenario '{b['title']}'...")
+            try:
+                _, battle_idx, report = self.backups.restore(b["folder"])
+                done.append(b["title"])
+                lines += [f"{b['title']}: {r}" for r in report if not r.startswith("Briefing updated")]
+            except PermissionError:
+                lines.append(f"{b['title']}: a game file is locked. Close the game and try again.")
+            except Exception as e:
+                lines.append(f"{b['title']}: not restored ({e}).")
+        self.idle()
+        self.refresh_scenes()
+        msg = f"Restored {len(done)} scenario(s): {', '.join(done)}." if done else "No scenario was restored."
+        if lines:
+            messagebox.showinfo("Restore scenarios", msg + "\n\n" + "\n".join(lines), parent=self.root)
+        self.status(msg, "ok" if done and not lines else "warn", banner=True)
+
     def report_game_update(self, update):
         """Tell the user what a game update (or file verification) changed."""
         lines = ["The game files were replaced since the editor last changed them (game update, or "
@@ -769,9 +832,12 @@ class EditorApp:
         if update["archive"]:
             lines.append(f"\nThe old backups belong to the previous game version and were set aside in:\n"
                          f"{update['archive']}\nThey will not be restored. New backups are made on the next save.")
+        restorable = [b for b in self.backups.missing() if b["title"] in update["orphaned"]]
         if update["orphaned"]:
-            lines.append("\nThese custom scenarios are no longer in the game: " + ", ".join(update["orphaned"]) +
-                         ". Recreate them with Scenario > New scenario.")
+            lines.append("\nThese custom scenarios are no longer in the game: " + ", ".join(update["orphaned"]) + ".")
+            if restorable:
+                lines.append(f"{len(restorable)} of them can be restored from their backups "
+                             "(you will be asked next).")
         if update["leftovers"]:
             lines.append("\nTheir leftover files (" + ", ".join(update["leftovers"]) + ") are not used by "
                          "the game any more.\n\nDelete these leftover files now?")
@@ -781,6 +847,11 @@ class EditorApp:
         else:
             messagebox.showinfo("Game updated", "\n".join(lines), parent=self.root)
         self.refresh_scenes()
+        if restorable and messagebox.askyesno(
+                "Restore scenarios",
+                "Restore these scenarios from their backups now?\n\n" + "\n".join(b["title"] for b in restorable),
+                parent=self.root):
+            self.restore_backups(restorable)
 
     def resolve_game(self, requested):
         """Game folder from the command line, the settings, the Steam libraries or the user."""
@@ -830,6 +901,7 @@ class EditorApp:
         if settings.migrate_legacy_backups(game, ctx.scene_names):
             self.status("Existing backups were moved to this installation's backup folder.")
         self.scenarios = ScenarioManager(ctx, self.backup_dir)
+        self.backups = ScenarioBackups(ctx, self.scenarios)
         self.library = ObjectLibrary(ctx, self.backup_dir)
         update = None
         try:
@@ -851,6 +923,7 @@ class EditorApp:
             self.start_library_build(game)
         if update:
             self.report_game_update(update)
+        self.backup_unprotected()
         if ctx.verify_layouts:
             self.status("Game updated: " + ", ".join(ctx.affected_script_names()) + " changed or new; objects "
                         "using these scripts cannot be edited until the editor is updated. Everything else "
@@ -914,6 +987,7 @@ class EditorApp:
         menu("Scenario", [("New scenario...", self.new_scenario, "", "newscen"),
                           ("Mission text...", self.edit_mission_text),
                           ("Update briefing screen", self.update_briefing), None,
+                          ("Restore scenarios from backup...", lambda: self.restore_backups()),
                           ("Remove custom scenarios...", self.remove_custom)])
         menu("Windows", [("Table Of Contents", lambda: self.show_page("left", "toc"), "", "toc"),
                          ("Objects", lambda: self.show_page("left", "objects"), "", "objects"),
@@ -2183,6 +2257,7 @@ class EditorApp:
             lines = self.run_briefing_sync()
             if lines:
                 msg += " " + lines[0]
+            self.backup_scenario(m.index)
         self.status(msg, "ok", banner=True)
         return True
 
@@ -2295,6 +2370,8 @@ class EditorApp:
             self.idle()
             if cleared is None or not self.save():
                 return
+        else:
+            self.backup_scenario(battle_idx)
         self.status(f"Created '{title}' (level{battle_idx}). It is on the 'Custom Missions' page "
                     "of the mission select screen.", "ok", banner=True)
 
@@ -2322,6 +2399,8 @@ class EditorApp:
             return
         self.refresh_scenes()
         self.update_title()
+        if self.model.index in self.custom_titles:
+            self.backup_scenario(self.model.index)
         self.status(f"Mission text saved: '{title}'.", "ok", banner=True)
 
     def remove_custom(self):
@@ -2358,7 +2437,8 @@ class EditorApp:
             self.refresh_tables()
         self.refresh_scenes()
         self.update_title()
-        self.status(f"Removed {n} custom scenario(s) and restored the mission files.", "ok", banner=True)
+        self.status(f"Removed {n} custom scenario(s) and restored the mission files. Their backups are kept: "
+                    "Scenario > Restore scenarios from backup brings them back.", "ok", banner=True)
 
     # ---- objects -----------------------------------------------------
 

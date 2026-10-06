@@ -261,28 +261,35 @@ class GameContext:
             return os.path.splitext(os.path.basename(self.scene_names[index]))[0]
         return f"level{index}"
 
+    def script_rows(self, script_pid):
+        """Layout rows (level, type, name, meta flag) of the MonoScript with this
+        path id for this game version, or None when unknown or changed."""
+        info = self.scripts.get(script_pid)
+        if not info:
+            return None
+        if self.generator is None and script_key(*info) in self.changed_scripts:
+            return None
+        if self.generator is not None:
+            asm, ns, cls = info
+            try:
+                base = self.generator.get_nodes(asm + ".dll", f"{ns}.{cls}" if ns else cls)
+                return fixed_layout(base) if base else None
+            except Exception:
+                return None
+        return self.layouts.get(script_key(*info))
+
+    def script_pid(self, key):
+        """Path id of the MonoScript with this script key in this game version."""
+        if not hasattr(self, "_script_pids"):
+            self._script_pids = {script_key(*info): pid for pid, info in self.scripts.items()}
+        return self._script_pids.get(key)
+
     def script_nodes(self, script_pid):
         """Corrected type tree for the MonoScript with this path id, or None."""
         if script_pid in self._node_cache:
             return self._node_cache[script_pid]
-        node = None
-        info = self.scripts.get(script_pid)
-        if info and self.generator is None and script_key(*info) in self.changed_scripts:
-            self._node_cache[script_pid] = None
-            return None
-        if info:
-            rows = None
-            if self.generator is not None:
-                asm, ns, cls = info
-                try:
-                    base = self.generator.get_nodes(asm + ".dll", f"{ns}.{cls}" if ns else cls)
-                    rows = fixed_layout(base) if base else None
-                except Exception:
-                    rows = None
-            else:
-                rows = self.layouts.get(script_key(*info))
-            if rows:
-                node = layout_tree(rows)
+        rows = self.script_rows(script_pid)
+        node = layout_tree([list(r) for r in rows]) if rows else None
         self._node_cache[script_pid] = node
         return node
 
@@ -320,6 +327,7 @@ class SceneFile:
         self.changed = {}
         self.new_objects = {}
         self.foreign = {}
+        self.obj_nodes = {}
         self.meta_changed = False
         version = struct.unpack_from(">I", self.raw, 8)[0]
         if version < 22:
@@ -361,6 +369,8 @@ class SceneFile:
     def _nodes(self, pid, head_only=False):
         if pid in self.foreign:
             return self.foreign[pid][2]
+        if pid in self.obj_nodes and not head_only:
+            return self.obj_nodes[pid]
         obj = self.objects[self._template(pid)]
         if obj.type.name != "MonoBehaviour":
             return None
@@ -544,11 +554,13 @@ class SceneFile:
         w.write_string_to_null(sf.userInformation)
         return w.bytes
 
-    def build(self):
+    def build(self, compact=False):
         """Return the patched file bytes: original data kept verbatim, changed and
-        new objects appended (16-byte aligned), metadata regenerated."""
+        new objects appended (16-byte aligned), metadata regenerated. compact:
+        write every object once, without the superseded original data (for files
+        in which most objects changed)."""
         raw = self.raw
-        data = bytearray(raw[self.data_offset:self.file_size])
+        data = bytearray() if compact else bytearray(raw[self.data_offset:self.file_size])
 
         def append(blob):
             data.extend(b"\0" * ((-len(data)) % DATA_ALIGN))
@@ -558,7 +570,12 @@ class SceneFile:
 
         entries = {}
         for pid, o in self.objects.items():
-            entries[pid] = (pid, o.byte_start - self.data_offset, o.byte_size, o.type_id)
+            if compact:
+                if pid not in self.changed:
+                    blob = raw[o.byte_start:o.byte_start + o.byte_size]
+                    entries[pid] = (pid, append(blob), o.byte_size, o.type_id)
+            else:
+                entries[pid] = (pid, o.byte_start - self.data_offset, o.byte_size, o.type_id)
         for pid in sorted(self.changed):
             blob = self.serialize(pid)
             entries[pid] = (pid, append(blob), len(blob), self.objects[pid].type_id)
@@ -574,9 +591,9 @@ class SceneFile:
         struct.pack_into(">IQQ", header, 20, len(meta), file_size, data_offset)
         return bytes(header + meta + b"\0" * (data_offset - HEADER_SIZE - len(meta)) + data)
 
-    def save(self, path=None):
+    def save(self, path=None, compact=False):
         path = path or self.path
-        out = self.build()
+        out = self.build(compact)
         check = next(iter(UnityPy.load(out).files.values()))
         if len(check.objects) != len(self.objects) + len(self.new_objects):
             raise ValueError("internal check failed: object count mismatch after build")
