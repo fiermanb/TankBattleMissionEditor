@@ -449,8 +449,18 @@ class SceneModel:
                     if trp:
                         packs.add(trp)
         for g, d in self.go.items():
-            if "waypoint_pack" in d["m_Name"].lower() and g in self.tr_of_go:
-                packs.add(self.tr_of_go[g])
+            if g not in self.tr_of_go:
+                continue
+            trp = self.tr_of_go[g]
+            if "waypoint_pack" in d["m_Name"].lower():
+                packs.add(trp)
+            elif not d["m_IsActive"] and not self.tr[trp]["m_Father"]["m_PathID"]:
+                # a route by structure (also after renaming): an inactive top-level
+                # object whose children are bare waypoints (only a Transform)
+                kids = [c["m_PathID"] for c in self.tr[trp]["m_Children"]]
+                if kids and all(k in self.go_of_tr and self.comps.get(self.go_of_tr[k]) == [k]
+                                and not self.tr[k]["m_Children"] for k in kids):
+                    packs.add(trp)
         self.packs = sorted(packs, key=lambda p: self.name(self.go_of_tr[p]))
         self.waypoints = {}
         for p in self.packs:

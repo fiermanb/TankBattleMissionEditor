@@ -180,6 +180,17 @@ class SceneModelTest(unittest.TestCase):
         m.undo()
         self.assertEqual(m.sc.build(), m.sc.raw)
 
+    def test_renamed_route_stays_a_route(self):
+        m = SceneModel(self.ctx, SCENE, terrain=None)
+        m.begin("route")
+        wp = m.new_route((0.0, 0.0, 0.0))
+        pack = m.waypoints[m.tr_of_go[wp]]
+        m.rename(m.go_of_tr[pack], "Route North")
+        m.commit()
+        m.reindex()
+        self.assertIn(pack, m.packs)
+        self.assertIn(m.tr_of_go[wp], m.waypoints)
+
     def test_clear_to_terrain(self):
         m = SceneModel(self.ctx, SCENE, terrain="heights")
         m.begin("empty")
