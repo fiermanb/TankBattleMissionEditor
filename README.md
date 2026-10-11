@@ -6,7 +6,7 @@ is not affiliated with the game's developer or publisher. Buy the game from
 https://store.steampowered.com/app/5086560/Tank_Battle_Classic/
 
 
-![Main window: a custom scenario with a selected tank and its route, layers, spawn table and properties](docs/screenshot-main.png)
+![Main window: mission map with a selected tank and its route, layers, spawn table and properties](docs/screenshot-main.png)
 
 ![Events and trigger areas: the Objects pane, an event with its trigger area, and the events table](docs/screenshot-events.png)
 
