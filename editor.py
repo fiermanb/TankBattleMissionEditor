@@ -32,6 +32,7 @@ import settings
 from version import APP_NAME, COPYRIGHT, __version__
 from briefing_sync import sync_mission
 from scenario_backup import EXCHANGE_SUFFIX, ScenarioBackups
+from terrain_edit import TerrainPaint
 from object_import import ObjectLibrary, base_name, category, import_object, reconnect_event_refs
 from scenarios import ScenarioManager
 from scene_io import GameContext
@@ -105,9 +106,10 @@ EVENT_MARK = 18
 
 TOOLS = ("select", "pan", "zoomin", "zoomout", "rotate")
 TOOL_CURSORS = {"select": "arrow", "pan": "fleur", "zoomin": "crosshair", "zoomout": "crosshair",
-                "rotate": "exchange"}
+                "rotate": "exchange", "paint": "tcross"}
 TOOL_NAMES = {"select": "Select / move", "pan": "Pan", "zoomin": "Zoom in", "zoomout": "Zoom out",
-              "rotate": "Rotate"}
+              "rotate": "Rotate", "paint": "Paint terrain"}
+PAINT_DAB_STRENGTH = 0.35
 
 SPAWN_FIELDS = [
     ("Side", "Relationship", RELATIONSHIPS),
@@ -1076,6 +1078,9 @@ class EditorApp:
             "shows where the next waypoint joins. Right-click > Add here places at the pointer.\n"
             "Table Of Contents: click a check box to show or hide a layer; double-click a layer to open its "
             "table; right-click for Select all objects, Zoom to layer and Show only this layer.\n"
+            "Terrain tab (custom scenarios): choose a ground layer, Paint, then drag on the map; brush size "
+            "and strength are set below the layers. The first stroke gives the scenario its own terrain copy. "
+            "Esc ends painting; Ctrl+Z undoes a stroke.\n"
             "Events are shown on the map with the symbol of their type (Events layer); events at the same "
             "spot are laid out side by side. Their position only places the symbol: the game does not use "
             "it.\n"
@@ -1130,6 +1135,8 @@ class EditorApp:
         self.docks["left"] = DockArea(self.hpane, lambda: self.hide_dock("left"))
         self.build_toc(self.docks["left"].add_page("toc", "Table Of Contents", self.image("toc")))
         self.build_objects(self.docks["left"].add_page("objects", "Objects", self.image("objects")))
+        self.build_terrain_page(self.docks["left"].add_page("terrain", "Terrain",
+                                                                   self.legend(("swatch", "terrain", (0, 0, 0)))))
 
         self.vpane = tk.PanedWindow(self.hpane, orient="vertical", sashwidth=4, sashrelief="flat",
                                     bd=0, bg=FACE, opaqueresize=True)
@@ -1500,6 +1507,158 @@ class EditorApp:
         self.obj_tree.bind("<ButtonRelease-1>", self.on_obj_release, add="+")
         self.obj_entries = {}
         self.obj_templates = {}
+
+    def build_terrain_page(self, body):
+        self.terr_info = tk.Label(body, anchor="w", justify="left", fg="#404040", wraplength=270)
+        self.terr_info.pack(side="top", fill="x", padx=4, pady=(4, 2))
+        holder = bordered(body)
+        holder.pack(side="top", fill="both", expand=True, padx=2, pady=2)
+        self.terr_layers = ttk.Treeview(holder, show="tree", selectmode="browse", height=8)
+        self.terr_layers.pack(fill="both", expand=True)
+        form = tk.Frame(body)
+        form.pack(side="top", fill="x", padx=4, pady=4)
+        self.brush_size = tk.DoubleVar(value=10.0)
+        self.brush_strength = tk.DoubleVar(value=50.0)
+        for r, (text, var, lo, hi, unit) in enumerate((("Brush size", self.brush_size, 2, 80, " m"),
+                                                         ("Strength", self.brush_strength, 5, 100, " %"))):
+            tk.Label(form, text=text + ":", anchor="w").grid(row=r, column=0, sticky="w")
+            ttk.Scale(form, from_=lo, to=hi, variable=var, orient="horizontal").grid(row=r, column=1, sticky="ew",
+                                                                                     padx=4)
+            lbl = tk.Label(form, width=6, anchor="e")
+            lbl.grid(row=r, column=2, sticky="e")
+            var.trace_add("write", lambda *a, v=var, lb=lbl, u=unit: lb.config(text=f"{v.get():.0f}{u}"))
+            lbl.config(text=f"{var.get():.0f}{unit}")
+        form.columnconfigure(1, weight=1)
+        self.paint_btn = ttk.Button(body, text="Paint", command=self.toggle_paint)
+        self.paint_btn.pack(side="top", anchor="w", padx=4, pady=(0, 6))
+        self.terr_swatches = []
+
+    def can_paint(self):
+        m = self.model
+        return bool(m and m.terrain is not None and m.terrain.layer_colours and m.index in self.custom_titles)
+
+    def refresh_terrain_page(self):
+        t = self.terr_layers
+        sel = t.selection()
+        t.delete(*t.get_children())
+        self.terr_swatches = []
+        m = self.model
+        if not m or m.terrain is None:
+            self.terr_info.config(text="Open a mission to see its terrain.")
+        elif m.index not in self.custom_titles:
+            self.terr_info.config(text="Only custom scenarios can be painted: original missions share their "
+                                       "terrain with other missions. Create one with Scenario > New scenario.")
+        else:
+            self.terr_info.config(text="Choose a ground layer, then Paint and drag on the map. The first stroke "
+                                       "gives this scenario its own copy of the terrain; the original missions "
+                                       "keep theirs. Painting changes the look of the ground only.")
+        if m and m.terrain is not None:
+            for i, (name, col) in enumerate(zip(m.terrain.layer_names, m.terrain.layer_colours)):
+                img = ImageTk.PhotoImage(icons.swatch("square", tuple(int(c) for c in np.clip(col, 0, 255)),
+                                                      self.icon_size))
+                self.terr_swatches.append(img)
+                t.insert("", "end", iid=str(i), text=f" {name}", image=img)
+            keep = sel[0] if sel and t.exists(sel[0]) else ("0" if t.get_children() else None)
+            if keep:
+                t.selection_set(keep)
+        state = "normal" if self.can_paint() else "disabled"
+        self.paint_btn.config(state=state)
+        if not self.can_paint() and self.tool == "paint":
+            self.set_tool("select")
+
+    def toggle_paint(self):
+        if self.tool == "paint":
+            self.set_tool("select")
+            return
+        if not self.can_paint():
+            return
+        self.set_tool("paint")
+        self.status("Drag on the map to paint the chosen layer (Esc or another tool ends painting).")
+
+    def paint_layer(self):
+        sel = self.terr_layers.selection()
+        return int(sel[0]) if sel else 0
+
+    def start_paint(self, e):
+        m = self.model
+        if not self.can_paint():
+            self.status("Only custom scenarios can be painted.", "warn", banner=True)
+            return
+        if getattr(m, "terrain_paint", None) is None:
+            try:
+                m.terrain_paint = TerrainPaint(m)
+            except Exception as ex:
+                self.status(f"This terrain cannot be painted: {ex}", "warn", banner=True)
+                return
+        tp = m.terrain_paint
+        m.begin("Paint terrain")
+        try:
+            made = tp.ensure_copy()
+        except Exception as ex:
+            m.commit()
+            self.status(f"The terrain could not be copied for this scenario: {ex}", "warn", banner=True)
+            return
+        if made:
+            entry = next((s for s in self.scenarios.custom if s["battle_index"] == m.index), None)
+            if entry is not None:
+                for s in self.scenarios.manifest["scenarios"]:
+                    if s["scene_id"] == entry["scene_id"]:
+                        s["terrain_source"] = {"file": made[0], "pid": made[1],
+                                               "desc": self.backups.index.describe(made[0], made[1])}
+                self.scenarios._save_manifest()
+        wx, wz = self.view.s2w(e.x, e.y)
+        self.drag = {"mode": "paint", "patches": [], "last": None}
+        self.paint_dab(wx, wz)
+
+    def paint_dab(self, wx, wz):
+        d = self.drag
+        tp = self.model.terrain_paint
+        radius = self.brush_size.get()
+        last = d["last"]
+        points = [(wx, wz)]
+        if last is not None:
+            dist = math.hypot(wx - last[0], wz - last[1])
+            step = max(0.5, radius * 0.3)
+            if dist < step:
+                return
+            n = int(dist // step)
+            points = [(last[0] + (wx - last[0]) * (k + 1) / n, last[1] + (wz - last[1]) * (k + 1) / n)
+                      for k in range(n)]
+        for x, z in points:
+            res = tp.paint(x, z, radius, self.paint_layer(), self.brush_strength.get() / 100.0 * PAINT_DAB_STRENGTH)
+            if res:
+                undo, rows, cols = res
+                d["patches"].append(undo)
+                self.show_painted(rows, cols)
+        d["last"] = points[-1]
+        self.request_render()
+
+    def show_painted(self, rows, cols):
+        """Redraw the painted part of the terrain image."""
+        t = self.model.terrain
+        tp = self.model.terrain_paint
+        done = t.recolour(tp.alphas, rows, cols)
+        if self._terrain_img is not None and done:
+            n = t.image_n
+            (r0, r1), (c0, c1) = done
+            if r0 < r1 and c0 < c1:
+                part = np.clip(t.image[n - r1:n - r0, c0:c1].astype(np.int32) * 5 // 4, 0, 255).astype(np.uint8)
+                self._terrain_img.paste(Image.fromarray(part), (c0, n - r1))
+        self._base_key = None
+
+    def finish_paint(self):
+        d = self.drag
+        m = self.model
+        tp = m.terrain_paint
+        patches = d["patches"]
+
+        def undo():
+            for p in reversed(patches):
+                rows, cols = tp.restore_patch(p)
+                self.show_painted(rows, cols)
+            tp.resync()
+        m.commit(undo_fn=undo if patches else None)
+        self.changed()
 
     def create_items(self):
         """(group, label, icon, key) of the new-object templates in the Objects pane
@@ -2150,6 +2309,8 @@ class EditorApp:
 
     def set_tool(self, tool):
         self.tool = tool
+        if tool != "paint":
+            self.canvas.delete("brush")
         for name, btn in self.tool_buttons.items():
             btn.set_active(name == tool)
         self.canvas.config(cursor=TOOL_CURSORS[tool])
@@ -2256,6 +2417,7 @@ class EditorApp:
         self.fit_view()
         self.idle()
         self.update_title()
+        self.refresh_terrain_page()
         self.fill_catalog()
         self.refresh_props()
         self.refresh_tables()
@@ -3399,7 +3561,9 @@ class EditorApp:
                 self.place["last"] = (e.x, e.y, now)
             self.draw_rubber()
             return
-        if self.tool == "pan":
+        if self.tool == "paint":
+            self.start_paint(e)
+        elif self.tool == "pan":
             self.on_pan_start(e)
         elif self.tool == "zoomin":
             self.drag = {"mode": "zoombox", "start": (e.x, e.y)}
@@ -3490,6 +3654,10 @@ class EditorApp:
         if not d or not self.model:
             return
         mode = d["mode"]
+        if mode == "paint":
+            self.paint_dab(*self.view.s2w(e.x, e.y))
+            self.draw_brush(e.x, e.y)
+            return
         if mode == "pan":
             if math.hypot(e.x - d["start"][0], e.y - d["start"][1]) >= 4:
                 d["moved"] = True
@@ -3534,6 +3702,10 @@ class EditorApp:
 
     def on_release(self, e):
         d = self.drag
+        if d and d["mode"] == "paint":
+            self.finish_paint()
+            self.drag = None
+            return
         self.drag = None
         if not d:
             return
@@ -3613,8 +3785,18 @@ class EditorApp:
     def on_wheel(self, e):
         self.zoom_by(1.2 ** (e.delta / 120), e.x, e.y)
 
+    def draw_brush(self, x, y):
+        c = self.canvas
+        c.delete("brush")
+        if self.tool != "paint" or not self.model:
+            return
+        r = self.brush_size.get() * self.view.scale
+        c.create_oval(x - r, y - r, x + r, y + r, outline="#000000", width=3, tags="brush")
+        c.create_oval(x - r, y - r, x + r, y + r, outline="#FFFFFF", width=1, tags="brush")
+
     def on_hover(self, e):
         self.mouse = (e.x, e.y)
+        self.draw_brush(e.x, e.y)
         if self.place and self.place.get("anchor"):
             self.draw_rubber()
         if not self.model:
@@ -3654,6 +3836,9 @@ class EditorApp:
         elif k == "escape":
             if self.place:
                 self.end_place("Placement finished.")
+            elif self.tool == "paint":
+                self.set_tool("select")
+                self.status("Painting ended.")
             else:
                 self.select(None)
         elif k == "w":

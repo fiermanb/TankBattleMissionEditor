@@ -14,7 +14,9 @@ Each backup (backups/<installation>/scenarios/<scene id>/) holds
     to, its type, name and ordinal among objects of that type and name,
   - scripts.json.gz: the field layout of every game script the scene uses,
   - mission.json: the mission's settings and title/briefing,
-  - meta.json: source mission, game version and dates.
+  - meta.json: source mission, game version and dates,
+  - terrain.npz (only for a painted terrain): the painted weight maps; the
+    terrain copy is made again from the original terrain on restore.
 
 A backup can be exported as one .tbscenario file (a zip of these files) and
 imported in another installation: it contains no game assets, only the map and
@@ -33,14 +35,19 @@ import gzip
 import json
 import os
 import shutil
+import io
 import zipfile
 
+import numpy as np
+
 from scene_io import SceneFile, layout_tree, script_key
+from terrain_edit import copy_terrain, own_assets_name, read_alpha, terrain_components
 
 BACKUP_DIR_NAME = "scenarios"
 EXCHANGE_SUFFIX = ".tbscenario"
 EXCHANGE_FORMAT = 1
 BACKUP_FILES = ("meta.json", "mission.json", "refs.json.gz", "scripts.json.gz", "battle.level")
+OPTIONAL_FILES = ("terrain.npz",)
 MAX_IMPORT_BYTES = 256 * 1024 * 1024
 SKIP_MISSION_FIELDS = {"m_GameObject", "m_Enabled", "m_Script", "m_Name", "Scene_ID", "Menu_Scene_Name",
                        "Battle_Scene_Name", "Scene_Title", "Scene_JPN_Title", "Scene_Briefing",
@@ -217,12 +224,15 @@ class ScenarioBackups:
         mission = found[1]
         path = ctx.scene_path(entry["battle_index"])
         sc = SceneFile(ctx, path)
+        own = own_assets_name(entry["battle_index"])
 
         refs, scripts = {}, {}
 
         def note(p):
             if p["m_FileID"] > 0 and p["m_PathID"]:
                 file = sc.externals[p["m_FileID"] - 1]
+                if file == own:
+                    return p
                 key = str(p["m_PathID"])
                 per = refs.setdefault(file, {})
                 if key not in per:
@@ -241,6 +251,7 @@ class ScenarioBackups:
 
         folder = self.folder(entry["scene_id"])
         os.makedirs(folder, exist_ok=True)
+        terrain = self._backup_terrain(sc, own, entry, folder)
         tmp = os.path.join(folder, "battle.level.tmp")
         shutil.copyfile(path, tmp)
         os.replace(tmp, os.path.join(folder, "battle.level"))
@@ -252,9 +263,32 @@ class ScenarioBackups:
             "title": mission["Scene_Title"], "briefing": mission["Scene_Briefing"],
             "scene_id": entry["scene_id"], "source": entry.get("source"),
             "battle_scene": entry["battle_scene"], "game_metadata_sha256": ctx.metadata_sha256,
-            "unity_version": ctx.unity_version,
+            "unity_version": ctx.unity_version, "terrain": terrain,
             "saved": datetime.datetime.now().isoformat(timespec="seconds")})
         return folder
+
+    def _backup_terrain(self, sc, own, entry, folder):
+        """Store the weights of a painted terrain (the scenario's own copy) in
+        terrain.npz. Returns the terrain description for meta.json, or None."""
+        path = os.path.join(folder, "terrain.npz")
+        comps = terrain_components(sc)
+        tpid = next((p for p in comps if sc.type_name(p) == "Terrain"), None)
+        ref = sc.read(tpid)["m_TerrainData"] if tpid is not None else None
+        if not ref or not ref["m_FileID"] or sc.externals[ref["m_FileID"] - 1] != own:
+            if os.path.exists(path):
+                os.remove(path)
+            return None
+        assets = SceneFile(self.ctx, os.path.join(self.ctx.data_dir, own))
+        td = assets.read(ref["m_PathID"])
+        alphas = [read_alpha(assets.read(p["m_PathID"])) for p in td["m_SplatDatabase"]["m_AlphaTextures"]]
+        buf = io.BytesIO()
+        np.savez_compressed(buf, *alphas)
+        with open(path + ".tmp", "wb") as f:
+            f.write(buf.getvalue())
+        os.replace(path + ".tmp", path)
+        src = entry.get("terrain_source") or {}
+        desc = src.get("desc") or ["TerrainData", td.get("m_Name", ""), 0]
+        return {"own_file": own, "source_file": src.get("file"), "source_pid": src.get("pid"), "source": desc}
 
     def backup_all(self):
         done = []
@@ -275,8 +309,9 @@ class ScenarioBackups:
         tmp = path + ".tmp"
         with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as z:
             z.writestr("format.json", json.dumps({"format": EXCHANGE_FORMAT, "editor_version": editor_version}))
-            for name in BACKUP_FILES:
-                z.write(os.path.join(folder, name), name)
+            for name in BACKUP_FILES + OPTIONAL_FILES:
+                if os.path.exists(os.path.join(folder, name)):
+                    z.write(os.path.join(folder, name), name)
         os.replace(tmp, path)
         return path
 
@@ -292,12 +327,13 @@ class ScenarioBackups:
             missing = [n for n in ("format.json",) + BACKUP_FILES if n not in names]
             if missing:
                 raise ValueError("not a scenario file (missing " + ", ".join(missing) + ")")
-            if sum(z.getinfo(n).file_size for n in ("format.json",) + BACKUP_FILES) > MAX_IMPORT_BYTES:
+            members = ("format.json",) + BACKUP_FILES + tuple(n for n in OPTIONAL_FILES if n in names)
+            if sum(z.getinfo(n).file_size for n in members) > MAX_IMPORT_BYTES:
                 raise ValueError("the scenario file is too large")
             fmt = json.loads(z.read("format.json"))
             if fmt.get("format") != EXCHANGE_FORMAT:
                 raise ValueError("this scenario file was made with a newer editor version; update the editor")
-            files = {n: z.read(n) for n in BACKUP_FILES}
+            files = {n: z.read(n) for n in members if n != "format.json"}
         meta = json.loads(files["meta.json"])
         for key in ("title", "scene_id", "game_metadata_sha256"):
             if not isinstance(meta.get(key), str):
@@ -376,11 +412,14 @@ class ScenarioBackups:
             smap[int(old)] = (new, old_tree, new_tree, new_rows != info["rows"])
 
         resolved = {}
+        own_old = (meta.get("terrain") or {}).get("own_file")
 
         def remap(p):
             if p["m_FileID"] <= 0 or not p["m_PathID"]:
                 return p
             file = sc.externals[p["m_FileID"] - 1]
+            if file == own_old:
+                return p
             key = (file, p["m_PathID"])
             if key not in resolved:
                 desc = refs.get(file, {}).get(str(p["m_PathID"]))
@@ -432,6 +471,58 @@ class ScenarioBackups:
                           + ", ".join(sorted(missing)[:5]) + (" ..." if len(missing) > 5 else ""))
         return report
 
+    def _restore_terrain(self, folder, info, battle_idx, entry):
+        """Make the scenario's terrain copy again from the original terrain of
+        the installed game version with the backed-up weights, and point the
+        restored scene at it."""
+        ctx = self.ctx
+        with np.load(os.path.join(folder, "terrain.npz")) as z:
+            alphas = [z[k] for k in sorted(z.files, key=lambda k: int(k.split("_")[-1]))]
+        hit = None
+        if info.get("source_file") and info.get("source_pid") is not None:
+            hit = self.index.resolve(info["source_file"], info["source_pid"], tuple(info["source"]))
+        if hit is None:
+            for f in ctx.asset_files():
+                cands = self.index.table(f)[2].get(("TerrainData", info["source"][1]), [])
+                if len(cands) == 1:
+                    hit = (f, cands[0])
+                    break
+        if hit is None:
+            return ["Its painted terrain could not be restored: the original terrain is no longer in the game."]
+        src = SceneFile(ctx, os.path.join(ctx.data_dir, hit[0]))
+        tex = [src.read(p["m_PathID"]) for p in src.read(hit[1])["m_SplatDatabase"]["m_AlphaTextures"]]
+        fitted = []
+        for a, t in zip(alphas, tex):
+            h, w = t["m_Height"], t["m_Width"]
+            if a.shape[:2] != (h, w):
+                rows = np.minimum((np.arange(h) * a.shape[0] // h), a.shape[0] - 1)
+                cols = np.minimum((np.arange(w) * a.shape[1] // w), a.shape[1] - 1)
+                a = a[rows][:, cols]
+            fitted.append(np.ascontiguousarray(a))
+        own_new = own_assets_name(battle_idx)
+        assets = SceneFile(ctx, os.path.join(ctx.data_dir, own_new))
+        new_td, _ = copy_terrain(ctx, assets, hit[0], hit[1], fitted)
+        assets.save()
+        level = SceneFile(ctx, ctx.scene_path(battle_idx))
+        if info["own_file"] in level.externals:
+            i = level.externals.index(info["own_file"])
+            level.sf.externals[i].path = own_new
+            level.externals[i] = own_new
+            level.meta_changed = True
+            fid = i + 1
+        else:
+            fid = level.ensure_external_path(own_new)
+        for p in terrain_components(level):
+            d = dict(level.read(p))
+            d["m_TerrainData"] = {"m_FileID": fid, "m_PathID": new_td}
+            level.write(p, d)
+        level.save()
+        for s in self.scenarios.manifest["scenarios"]:
+            if s["scene_id"] == entry["scene_id"]:
+                s["terrain_source"] = {"file": hit[0], "pid": hit[1], "desc": self.index.describe(hit[0], hit[1])}
+        self.scenarios._save_manifest()
+        return []
+
     def restore(self, folder_name, force=False):
         """Recreate a backed-up scenario in the installed game. Returns
         (menu index, battle index, report lines)."""
@@ -454,6 +545,8 @@ class ScenarioBackups:
         menu_idx, battle_idx = sm.create(src, meta["title"], meta["briefing"])
         report += self.convert(folder, self.ctx.scene_path(battle_idx), force=force)
         entry = next(c for c in sm.custom if c["battle_index"] == battle_idx)
+        if meta.get("terrain"):
+            report += self._restore_terrain(folder, meta["terrain"], battle_idx, entry)
         current = sm.mission_for_scene(entry["battle_scene"])[1]
         fields = {k: v for k, v in mission.items() if k not in SKIP_MISSION_FIELDS and k in current
                   and isinstance(v, (bool, int, float, str)) and type(v) is type(current[k])}

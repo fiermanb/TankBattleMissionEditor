@@ -187,6 +187,21 @@ def mesh_aabb(ctx, sc, pptr):
 
 # ---- terrain --------------------------------------------------------------
 
+def downsample(px, n):
+    """(h, w, c) weights reduced to (n, n, c): block average when the size is a
+    multiple of n, else nearest sampling. Used for the whole map image and for
+    redrawing painted parts, so both give the same colours."""
+    h = px.shape[0]
+    if h == n:
+        return px.astype(float)
+    if h % n == 0 and px.shape[1] % n == 0:
+        f = h // n
+        return px.reshape(n, f, n, px.shape[1] // n, px.shape[2]).astype(float).mean((1, 3))
+    rows = np.minimum(((np.arange(n) + 0.5) * h / n).astype(int), h - 1)
+    cols = np.minimum(((np.arange(n) + 0.5) * px.shape[1] / n).astype(int), px.shape[1] - 1)
+    return px[rows][:, cols].astype(float)
+
+
 class Terrain:
     def __init__(self, ctx, sc, terrain_pid, world_pos, colour=True):
         d = sc.read(terrain_pid)
@@ -203,6 +218,7 @@ class Terrain:
         h = np.asarray(hm["m_Heights"], dtype=np.float32).reshape(self.res, self.res)
         self.heights = h / 32766.0 * scale[1] + world_pos[1]
         self.holes = self._hole_points(hm.get("m_Holes"))
+        self.layer_colours, self.layer_names = [], []
         self.image = self._colour(ctx, sf, td["m_SplatDatabase"]) if colour else None
 
     def _hole_points(self, raw):
@@ -224,12 +240,14 @@ class Terrain:
             other = ctx.external([e.path for e in file.externals][p["m_FileID"] - 1])
             return other, other.objects.get(p["m_PathID"]) if other else None
 
-        colours = []
+        colours, names = [], []
         for lp in splat["m_TerrainLayers"]:
             col = np.array((110.0, 110.0, 90.0))
+            names.append(f"Layer {len(names) + 1}")
             try:
                 lf, lo = deref(sf, lp)
                 layer = lo.read_typetree(check_read=False)
+                names[-1] = layer.get("m_Name") or names[-1]
                 tf, to = deref(lf, layer["m_DiffuseTexture"])
                 tex = to.read()
                 im = tex.image.convert("RGB").resize((16, 16))
@@ -247,8 +265,13 @@ class Terrain:
         for ti, ap in enumerate(splat["m_AlphaTextures"]):
             try:
                 af, ao = deref(sf, ap)
-                im = ao.read().image.convert("RGBA").resize((n, n))
-                a = np.asarray(im, dtype=float) / 255.0
+                raw = ao.read_typetree(check_read=False)
+                if raw.get("m_TextureFormat") == 4:
+                    w, h = raw["m_Width"], raw["m_Height"]
+                    px = np.frombuffer(bytes(raw["image data"])[:w * h * 4], dtype=np.uint8).reshape(h, w, 4)
+                else:
+                    px = np.asarray(ao.read().image.convert("RGBA"))[::-1]
+                a = downsample(px, n)[::-1] / 255.0
             except Exception:
                 continue
             for ch in range(4):
@@ -267,8 +290,44 @@ class Terrain:
         cell = self.size_x / n
         gy, gx = np.gradient(h, cell)
         shade = 0.8 + 0.3 * np.clip((gx + gy) * 2.0, -1, 1)
+        self.layer_colours, self.layer_names, self.shade, self.image_n = colours, names, shade, n
         img = np.clip(base * shade[:, :, None], 0, 255).astype(np.uint8)
         return img
+
+    def recolour(self, alphas, rows, cols):
+        """Redraw part of the colour image from splat weight maps (raw texture
+        rows, south first; one (res, res, 4) uint8 array per texture). rows and
+        cols: (first, last + 1) in weight map pixels. The image may have another
+        resolution than the weight maps (nearest sampling)."""
+        if self.image is None or not alphas:
+            return
+        n = self.image_n
+        res = alphas[0].shape[0]
+        k = n / res
+        i0, i1 = max(0, int(np.floor(rows[0] * k))), min(n, int(np.ceil(rows[1] * k)))
+        j0, j1 = max(0, int(np.floor(cols[0] * k))), min(n, int(np.ceil(cols[1] * k)))
+        if i0 >= i1 or j0 >= j1:
+            return
+        rgb = np.zeros((i1 - i0, j1 - j0, 3))
+        weight = np.zeros((i1 - i0, j1 - j0, 1))
+        for ti, a in enumerate(alphas):
+            if res % n == 0:
+                f = res // n
+                part = a[i0 * f:i1 * f, j0 * f:j1 * f].reshape(i1 - i0, f, j1 - j0, f, 4).astype(float).mean((1, 3))
+            else:
+                part = downsample(a, n)[i0:i1, j0:j1]
+            part = part / 255.0
+            for ch in range(4):
+                li = ti * 4 + ch
+                if li < len(self.layer_colours):
+                    w = part[:, :, ch:ch + 1]
+                    rgb += w * self.layer_colours[li]
+                    weight += w
+        base = np.where(weight > 0.01, rgb / np.maximum(weight, 1e-6), np.array((105.0, 110.0, 80.0)))
+        top, bottom = n - i1, n - i0
+        shade = self.shade[top:bottom, j0:j1][::-1]
+        self.image[top:bottom, j0:j1] = np.clip(base * shade[:, :, None], 0, 255).astype(np.uint8)[::-1]
+        return (i0, i1), (j0, j1)
 
     def height_at(self, x, z):
         u = (x - self.origin[0]) / self.size_x * (self.res - 1)
@@ -515,9 +574,14 @@ class SceneModel:
         if self._op is None:
             self._op = {"label": text, "states": {}}
 
-    def commit(self):
+    def commit(self, undo_fn=None):
+        """End the edit started with begin(). undo_fn: extra step for undo, for
+        edits outside the scene objects (terrain painting)."""
         op, self._op = self._op, None
-        if op and op["states"]:
+        if op and undo_fn is not None:
+            op["undo_fn"] = undo_fn
+            self.edits += 1
+        if op and (op["states"] or undo_fn is not None):
             self.undo_stack.append(op)
 
     def _touch(self, pid):
@@ -582,6 +646,8 @@ class SceneModel:
                 if not was_changed:
                     sc.changed.pop(pid, None)
         self.reindex()
+        if op.get("undo_fn"):
+            op["undo_fn"]()
         return op["label"]
 
     def edit(self, pid):
@@ -1061,6 +1127,8 @@ class SceneModel:
         return self._marker() != self.saved_marker
 
     def save(self):
+        if getattr(self, "terrain_paint", None) is not None:
+            self.terrain_paint.save()
         size = self.sc.save()
         self.saved_marker = self._marker()
         return size

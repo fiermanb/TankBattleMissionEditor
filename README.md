@@ -30,6 +30,8 @@ The editor finds the game in your Steam libraries or asks for its folder
   adds a row.
 - Table Of Contents: layer counts; double-click opens the layer's table,
   right-click selects, zooms or shows only that layer.
+- Terrain tab: paint the ground layers of a custom scenario (it gets its own
+  copy of the terrain; the original missions keep theirs).
 - Tables of spawns, events, waypoints and scenery: double-click a cell to
   edit it.
 - New scenarios from an existing mission or on an empty terrain (Scenario
