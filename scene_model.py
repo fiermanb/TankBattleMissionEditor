@@ -42,7 +42,8 @@ EVENT_TYPES = {
 }
 TRIGGER_TYPES = {0: "Timer", 1: "Tanks destroyed", 2: "Tank in trigger area"}
 # confirmed in game (trigger test, 2026-10-11): the setting selects the tanks an
-# area trigger reacts to; for 'tanks destroyed' triggers setting 1 behaved as 0
+# area trigger reacts to (one area can trigger several events); for 'tanks
+# destroyed' triggers setting 1 behaved as 0
 TRIGGER_SETTINGS = {0: "Listed tanks", 1: "Any hostile tank", 2: "Any friendly tank"}
 OPERATORS = {0: "All listed tanks", 1: "Any listed tank"}
 RELATIONSHIPS = {0: "Friendly", 1: "Hostile"}

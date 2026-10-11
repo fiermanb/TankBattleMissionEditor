@@ -3864,7 +3864,7 @@ class EditorApp:
                 self.prop_entry(title, f"{size[key]:.1f}",
                                 lambda s, k=key: self.op("Resize trigger area", m.set_area_size, go,
                                                          **{k: float(s)}))
-        self.prop_check("Shown in game", m.area_visible(go),
+        self.prop_check("Shown in game (solid block, for testing)", m.area_visible(go),
                         lambda v: self.op("Show trigger area", m.set_area_visible, go, v))
         users = self.referenced_by(go)
         self.prop_info("Used by", ", ".join(users) if users else "(no event)")
