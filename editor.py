@@ -92,6 +92,7 @@ TOC_LAYERS = [
     ("Friendly", "Friendly", "triangle", COL_FRIEND, "Spawns"),
     ("Hostile", "Hostile", "triangle", COL_HOSTILE, "Spawns"),
     ("Waypoints", "Waypoints", "diamond", PACK_COLOURS[0], None),
+    ("RouteLinks", "Tank route links", "routelink", PACK_COLOURS[0], "Waypoints"),
     ("Events", "Events", "event", None, None),
     ("Scenery", "Scenery", None, None, None),
 ] + [(cat, cat, "square", col, "Scenery") for cat, col in CATEGORY_COLOURS.items()] + [
@@ -1129,6 +1130,8 @@ class EditorApp:
             "the first stroke gives the scenario its own terrain copy; Ctrl+Z undoes a stroke. The AI's route "
             "map does not follow height changes. Table Of Contents > Terrain: elevation tint and contour lines "
             "show heights.\n"
+            "Routes: right-click a tank > Route to choose its route, or New route from here (then click the "
+            "waypoints). Table Of Contents > Waypoints > Tank route links shows which tank uses which route.\n"
             "F5 starts the game (through Steam).\n"
             "Events are shown on the map with the symbol of their type (Events layer); events at the same "
             "spot are laid out side by side. Their position only places the symbol: the game does not use "
@@ -1408,7 +1411,7 @@ class EditorApp:
                     counts["Deleted"] += 1
             counts["Deleted"] += sum(1 for e in m.events if e not in m.spawns and not m.active(m.event_go[e]))
         for k, text, kind, colour, parent in TOC_LAYERS:
-            n = counts[k] if m and k not in ("Terrain", "Elevation", "Contours") else None
+            n = counts[k] if m and k not in ("Terrain", "Elevation", "Contours", "RouteLinks") else None
             if k == "Contours" and self._contour_interval:
                 text += f" ({self._contour_interval:g} m)"
             self.toc.item(k, text=f" {text}" + (f" ({n})" if n is not None else ""))
@@ -3361,6 +3364,32 @@ class EditorApp:
         pack = m.waypoints[m.tr_of_go[new]]
         self.continue_route(pack)
 
+    def assign_route(self, evs, pack):
+        """Give the AI tanks (spawn events) a route (pack transform, 0 = none)."""
+        m = self.model
+        self.op("Set route", lambda: [m.assign_pack(e, pack) for e in evs])
+        name = m.name(m.go_of_tr[pack]) if pack else "no route"
+        self.status(f"{len(evs)} tank(s) now use {name}.", "ok")
+
+    def new_route_for(self, evs):
+        """New route that starts at the (first) tank and is assigned to the
+        tanks; then each click adds the next waypoint (Enter, Esc or a
+        right-click ends)."""
+        m = self.model
+        p = m.world(m.tr_of_go[m.event_go[evs[0]]])[0]
+
+        def do():
+            wp = m.new_route(self.ground_point(p[0], p[2]))
+            pack = m.waypoints[m.tr_of_go[wp]]
+            for e in evs:
+                m.assign_pack(e, pack)
+            return wp
+        wp = self.op("New route", do)
+        if wp is None:
+            return
+        self.select(wp)
+        self.continue_route(m.waypoints[m.tr_of_go[wp]])
+
     def continue_route(self, pack):
         """Add waypoints to route `pack` by clicking, each after the selected
         waypoint of that route (or at the end)."""
@@ -3962,6 +3991,24 @@ class EditorApp:
         menu.insert_cascade(0, label="Add here", menu=add, compound="left",
                             image=self.legend(("swatch", "triangle", COL_HOSTILE)))
         menu.insert_separator(1)
+        m = self.model
+        tanks = [m.event_of_go(g) for g in self.sel if g in m.go and self.kind(g) == "spawn"]
+        tanks = [e for e in tanks if m.sc.read(e)["Tank_ID"] != 1]
+        if tanks:
+            routes = tk.Menu(menu, tearoff=0)
+            current = {m.spawn_pack(e) for e in tanks}
+            self._route_var = tk.IntVar(value=next(iter(current)) if len(current) == 1 else -1)
+            routes.add_radiobutton(label="(none)", variable=self._route_var, value=0,
+                                   command=lambda: self.assign_route(tanks, 0))
+            for p in m.packs:
+                routes.add_radiobutton(label=m.name(m.go_of_tr[p]), variable=self._route_var, value=p,
+                                       command=lambda pk=p: self.assign_route(tanks, pk))
+            routes.add_separator()
+            routes.add_command(label="New route from here", command=lambda: self.new_route_for(tanks),
+                               compound="left", image=self.legend(("swatch", "route", PACK_COLOURS[0])))
+            menu.insert_cascade(2, label=f"Route ({len(tanks)} tank{'s' if len(tanks) > 1 else ''})",
+                                menu=routes, compound="left", image=self.legend(("swatch", "route", PACK_COLOURS[0])))
+            menu.insert_separator(3)
         try:
             menu.tk_popup(e.x_root, e.y_root)
         finally:
@@ -4188,6 +4235,12 @@ class EditorApp:
             trp = m.tr_of_go.get(sel)
             sel_pack = m.waypoints.get(trp, trp if trp in m.packs else None)
 
+        users = {}
+        for e in m.spawns:
+            if self.spawn_visible(e):
+                p = m.spawn_pack(e)
+                if p:
+                    users.setdefault(p, []).append(e)
         if self.layer("Waypoints"):
             for pi, pack in enumerate(m.packs):
                 col = hexc(PACK_COLOURS[pi % len(PACK_COLOURS)])
@@ -4215,11 +4268,15 @@ class EditorApp:
                 if pts and (chosen or v.scale > 0.6):
                     c.create_text(pts[0][0] + 10, pts[0][1] + 6, text=m.name(m.go_of_tr[pack]), anchor="nw",
                                   fill=col, font=MAP_FONT, tags="overlay")
-                if chosen and sel_ev is not None and sel_ev in m.spawns and pts:
-                    sp, _, _ = m.world(m.tr_of_go[m.event_go[sel_ev]])
-                    sx, sy = v.w2s(sp[0], sp[2])
-                    near = min(pts, key=lambda q: (q[0] - sx) ** 2 + (q[1] - sy) ** 2)
-                    c.create_line(sx, sy, near[0], near[1], fill=col, width=2, dash=(6, 4), tags="overlay")
+                if pts:
+                    for e in users.get(pack, []):
+                        if e != sel_ev and not self.layer("RouteLinks"):
+                            continue
+                        sp, _, _ = m.world(m.tr_of_go[m.event_go[e]])
+                        sx, sy = v.w2s(sp[0], sp[2])
+                        near = min(pts, key=lambda q: (q[0] - sx) ** 2 + (q[1] - sy) ** 2)
+                        c.create_line(sx, sy, near[0], near[1], fill=col, width=3 if e == sel_ev else 2,
+                                      dash=(6, 4), tags="overlay")
 
         for e in m.spawns:
             if not self.spawn_visible(e):

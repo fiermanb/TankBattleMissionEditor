@@ -255,6 +255,11 @@ def swatch(kind, colour, size):
         d.polygon([(4, 60), (24, 26), (36, 44), (44, 34), (60, 60)], fill=(140, 120, 80, 255))
     elif kind == "outline":
         d.rectangle((6, 6, 58, 58), outline=c, width=6)
+    elif kind == "routelink":
+        d.polygon([(10, 10), (30, 20), (10, 30)], fill=(240, 70, 60, 255), outline=BLACK)
+        for x in range(26, 52, 8):
+            d.line((x, 34 + (x - 26) // 2, x + 4, 36 + (x - 26) // 2), fill=c, width=4)
+        d.polygon([(52, 42), (60, 50), (52, 58), (44, 50)], fill=c, outline=BLACK)
     elif kind == "elevation":
         for y in range(6, 59):
             f = (58 - y) / 52
