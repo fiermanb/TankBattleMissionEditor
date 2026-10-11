@@ -80,7 +80,9 @@ CATEGORY_COLOURS = {
     "Vehicles": (150, 105, 170),
     "Roads and rails": (110, 110, 122),
     "Props": (128, 128, 118),
+    "Trigger areas": (235, 125, 30),
 }
+AREA_COLOUR = CATEGORY_COLOURS["Trigger areas"]
 LARGE_AREA = 20000.0
 ALT_MASK = 0x20000
 SHIFT_MASK = 0x1
@@ -159,6 +161,8 @@ SPAWN_FIELDS = [
 EVENT_FIELDS = [
     ("Trigger", "Trigger_Type", TRIGGER_TYPES),
     ("Trigger time (s)", "Trigger_Time", "float"),
+    ("Trigger setting", "Trigger_Setting_Type", "int"),
+    ("Operator", "Operator_Type", "int"),
     ("All triggers needed", "All_Trigger_Flag", "bool"),
     ("Necessary count", "Necessary_Num", "int"),
     ("Message", "Event_Message", "text"),
@@ -3086,6 +3090,10 @@ class EditorApp:
         if result is None:
             return
         root, cleared = result
+        if root in m.areas:
+            m.begin("Name trigger area")
+            m.rename(root, m._unique_name("Trigger area"))
+            m.commit()
         self.selected = root
         self.changed()
         note = f" {cleared} outside reference(s) were cleared." if cleared else ""
@@ -3631,6 +3639,56 @@ class EditorApp:
             m._set(ev, d)
         self.op(f"Set {title.lower()}", do)
         self.status(f"{title}: {len(refs)} event(s).", "ok")
+
+    def prop_arealist(self, ev):
+        """Trigger areas of an event (names) with a button to choose them."""
+        m = self.model
+        owner = {pid: g for g, pid in m.areas.items()}
+        names = [m.name(owner[r["m_PathID"]]) for r in m.sc.read(ev).get("Trigger_Collider_Scripts") or []
+                 if r["m_FileID"] == 0 and r["m_PathID"] in owner]
+        self.prop_info("Trigger areas", ", ".join(names) if names else "(none)")
+        r = self._next()
+        ttk.Button(self.props, text="Choose trigger areas...", command=lambda: self.choose_areas(ev)).grid(
+            row=r, column=1, sticky="w", pady=(0, 4))
+
+    def choose_areas(self, ev):
+        m = self.model
+        items = [(f"{m.name(g):<32} {'shown' if m.area_visible(g) else 'hidden'} in game", pid)
+                 for g, pid in m.areas.items() if m.active(g)]
+        if not items:
+            self.status("This mission has no trigger areas. Add one from the Objects pane (Trigger areas).",
+                        "warn", banner=True)
+            return
+        chosen = {r["m_PathID"] for r in m.sc.read(ev).get("Trigger_Collider_Scripts") or [] if r["m_FileID"] == 0}
+        res = TankListDialog(self.root, "Trigger areas", items, chosen, noun="trigger areas").run()
+        if res is None:
+            return
+        refs = [{"m_FileID": 0, "m_PathID": p} for p in res]
+
+        def do():
+            d = m.edit(ev)
+            d["Trigger_Collider_Scripts"] = refs
+            if "Trigger_Collider_Num" in d:
+                d["Trigger_Collider_Num"] = max(len(refs), 1)
+            m._set(ev, d)
+        self.op("Set trigger areas", do)
+        self.status(f"Trigger areas: {len(refs)}.", "ok")
+
+    def area_rows(self, go):
+        """Size and visibility of a trigger area."""
+        m = self.model
+        self.prop_info("Category", "Trigger area")
+        size = m.area_size(go)
+        for key, title in (("width", "Width (m)"), ("depth", "Depth (m)"), ("height", "Height (m)"),
+                           ("radius", "Radius (m)")):
+            if key in size:
+                self.prop_entry(title, f"{size[key]:.1f}",
+                                lambda s, k=key: self.op("Resize trigger area", m.set_area_size, go,
+                                                         **{k: float(s)}))
+        self.prop_check("Shown in game", m.area_visible(go),
+                        lambda v: self.op("Show trigger area", m.set_area_visible, go, v))
+        users = self.referenced_by(go)
+        self.prop_info("Used by", ", ".join(users) if users else "(no event)")
 
     def prop_enabled(self, ev):
         """'Enabled at start' of an event; a disabled event waits for an Enable
@@ -4339,6 +4397,8 @@ class EditorApp:
                 order = order[np.argsort(-areas[order])]
                 draw = ImageDraw.Draw(img)
                 for i in order:
+                    if colours[i] == AREA_COLOUR:
+                        continue
                     col = colours[i] if active[i] else COL_HIDDEN
                     ext = mx[i] - mn[i]
                     pts = [tuple(p) for p in s[i]]
@@ -4429,6 +4489,27 @@ class EditorApp:
                         near = min(pts, key=lambda q: (q[0] - sx) ** 2 + (q[1] - sy) ** 2)
                         c.create_line(sx, sy, near[0], near[1], fill=col, width=3 if e == sel_ev else 2,
                                       dash=(6, 4), tags="overlay")
+
+        if self.layer("Scenery") and self.layer("Trigger areas"):
+            col = hexc(AREA_COLOUR)
+            for g in m.areas:
+                if not m.active(g) and not show_hidden:
+                    continue
+                shape = m.area_shape(g)
+                if shape is None:
+                    continue
+                width = 3 if g == sel else 2
+                if shape[0] == "box":
+                    pts = [q for x, z in shape[1] for q in v.w2s(x, z)]
+                    c.create_polygon(*pts, fill="", outline=col, width=width, dash=(8, 4), tags="overlay")
+                    cx, cy = v.w2s(*shape[1].mean(0))
+                else:
+                    cx, cy = v.w2s(*shape[1])
+                    r = shape[2] * v.scale
+                    c.create_oval(cx - r, cy - r, cx + r, cy + r, outline=col, width=width, dash=(8, 4),
+                                  tags="overlay")
+                if g == sel or v.scale > 0.4:
+                    c.create_text(cx, cy, text=m.name(g), fill=col, font=MAP_FONT, tags="overlay")
 
         for e in m.spawns:
             if not self.spawn_visible(e):
@@ -4548,6 +4629,8 @@ class EditorApp:
             self.field_rows(ev, SPAWN_FIELDS)
             self.prop_sep()
             self.prop_tanklist("Trigger tanks", ev, "Trigger_Tanks", "Trigger_Num")
+            if m.sc.read(ev)["Trigger_Type"] == 2:
+                self.prop_arealist(ev)
         elif kind == "event":
             ev = m.event_of_go(go)
             d = m.sc.read(ev)
@@ -4555,6 +4638,8 @@ class EditorApp:
             self.prop_enabled(ev)
             self.field_rows(ev, EVENT_FIELDS)
             self.prop_tanklist("Trigger tanks", ev, "Trigger_Tanks", "Trigger_Num")
+            if d["Trigger_Type"] == 2:
+                self.prop_arealist(ev)
             if d["Event_Type"] in (2, 3, 6):
                 self.prop_tanklist("Affected tanks", ev, "Target_Tanks", "Target_Num")
             if d["Event_Type"] == 13:
@@ -4578,8 +4663,11 @@ class EditorApp:
                 kids = [c["m_PathID"] for c in m.tr[pack]["m_Children"]]
                 idx = kids.index(m.tr_of_go[go]) + 1 if m.tr_of_go[go] in kids else "?"
                 self.prop_info("Pack / order", f"{m.name(m.go_of_tr[pack])} #{idx}")
-            self.transform_rows(go, heading=(kind != "waypoint"), scale=(kind == "object"))
-            if kind == "object":
+            area = kind == "object" and go in m.areas
+            self.transform_rows(go, heading=(kind != "waypoint"), scale=(kind == "object" and not area))
+            if area:
+                self.area_rows(go)
+            elif kind == "object":
                 self.prop_info("Category", category(m.name(go)))
             self.prop_info("Path", m.path(go))
 
@@ -4843,7 +4931,8 @@ class EditorApp:
             if m.event_go[e] == go:
                 continue
             d = m.sc.read(e)
-            for lst in ("Trigger_Tanks", "Target_Tanks", "Disabled_Events", "Useless_Events"):
+            for lst in ("Trigger_Tanks", "Target_Tanks", "Disabled_Events", "Useless_Events",
+                        "Trigger_Collider_Scripts"):
                 if any(r["m_FileID"] == 0 and r["m_PathID"] in refs for r in d.get(lst) or []):
                     names.append(m.name(m.event_go[e]).replace("Event (", "").rstrip(")"))
                     break

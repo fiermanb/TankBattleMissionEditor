@@ -31,7 +31,7 @@ import numpy as np
 
 from scene_model import SUFFIX_RE, SceneModel, q_inv, q_mul, q_rotate, q_dict, v_dict
 
-LIBRARY_VERSION = 3
+LIBRARY_VERSION = 4
 EVENTS_PER_TYPE = 4
 # components allowed in stand-alone objects from the asset files (scenery only:
 # no AI, weapons, effects or timers)
@@ -45,6 +45,7 @@ MAX_SIZE = 250.0
 MAX_PARTS = 400
 
 CATEGORIES = [
+    ("Trigger areas", ("trigger_collider", "trigger area")),
     ("Buildings", ("bld", "build", "house", "station", "church", "bunker", "hangar", "tower", "shop",
                    "barracks", "platform", "preset")),
     ("Trees and hedges", ("tree", "bush", "forest", "hedge", "grass", "plant")),

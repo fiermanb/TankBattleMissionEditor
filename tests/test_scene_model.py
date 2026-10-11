@@ -203,6 +203,42 @@ class SceneModelTest(unittest.TestCase):
             self.assertEqual(m.sc.read(ev)["Event_Text"]["m_PathID"], texts[10])
         self.assertEqual(m.missing_event_texts(), [])
 
+    def scene_named(self, label):
+        return next(i for i in range(len(self.ctx.scene_names)) if self.ctx.scene_label(i) == label)
+
+    def test_trigger_areas(self):
+        m = SceneModel(self.ctx, self.scene_named("20_Open_Field_Intercept_Practice"), terrain=None)
+        line = next(g for g in m.areas if m.name(g) == "Trigger_Collider (Defence Line)")
+        kind, corners, _ = m.area_shape(line)
+        self.assertEqual(kind, "box")
+        size = m.area_size(line)
+        self.assertAlmostEqual(size["width"], float(corners[:, 0].max() - corners[:, 0].min()), places=3)
+        self.assertIn(line, m.foot)
+        users = [m.event_go[e] for e in m.events
+                 if any(r["m_PathID"] == m.areas[line] for r in m.sc.read(e)["Trigger_Collider_Scripts"])]
+        self.assertTrue(users, "the defence line is used by an event")
+        m.begin("resize")
+        m.set_area_size(line, width=100.0, depth=20.0)
+        m.set_area_visible(line, True)
+        m.commit()
+        size = m.area_size(line)
+        self.assertAlmostEqual(size["width"], 100.0, places=3)
+        self.assertAlmostEqual(size["depth"], 20.0, places=3)
+        self.assertTrue(m.area_visible(line))
+        foot = m.foot[line]
+        self.assertAlmostEqual(float(foot[:, 0].max() - foot[:, 0].min()), 100.0, places=2)
+        m.undo()
+        self.assertEqual(m.sc.build(), m.sc.raw)
+
+        m = SceneModel(self.ctx, self.scene_named("53_Mountain_Area_Escort"), terrain=None)
+        goal = next(g for g in m.areas if m.name(g) == "Trigger_Collider (Goal)")
+        self.assertEqual(m.area_shape(goal)[0], "circle")
+        self.assertAlmostEqual(m.area_size(goal)["radius"], 40.0, places=3)
+        m.begin("radius")
+        m.set_area_size(goal, radius=25.0)
+        m.commit()
+        self.assertAlmostEqual(m.area_shape(goal)[2], 25.0, places=3)
+
     def test_renamed_route_stays_a_route(self):
         m = SceneModel(self.ctx, SCENE, terrain=None)
         m.begin("route")

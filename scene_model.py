@@ -24,6 +24,7 @@ from UnityPy.helpers.TypeTreeNode import TypeTreeNode
 from scene_io import SceneFile
 
 EVENT_SCRIPT = "Event_Controller_CS"
+AREA_SCRIPT = "Trigger_Collider_CS"
 TANK_PROP_SCRIPT = "Tank_Prop_SO"
 
 EVENT_TYPES = {
@@ -445,6 +446,11 @@ class SceneModel:
                 self.events.append(pid)
                 self.event_go[pid] = sc.read(pid, head_only=True)["m_GameObject"]["m_PathID"]
         self.spawns = [e for e in self.events if sc.read(e)["Event_Type"] == 0]
+        # trigger areas: GameObject -> its Trigger_Collider_CS component (what events reference)
+        self.areas = {}
+        for pid in self.mb:
+            if self.script_class(pid) == AREA_SCRIPT:
+                self.areas[sc.read(pid, head_only=True)["m_GameObject"]["m_PathID"]] = pid
 
         packs = set()
         for e in self.events:
@@ -600,8 +606,15 @@ class SceneModel:
         self.foot_version = getattr(self, "foot_version", 0) + 1
         if gos is None:
             self.foot = {}
-            gos = self.mesh_of_go.keys()
+            gos = list(self.mesh_of_go) + [g for g in getattr(self, "areas", {}) if g not in self.mesh_of_go]
         for g in gos:
+            if g in getattr(self, "areas", {}):
+                shape = self.area_shape(g)
+                if shape is not None:
+                    self.foot[g] = shape[1] if shape[0] == "box" else np.array(
+                        [(shape[1][0] + sx * shape[2], shape[1][1] + sz * shape[2])
+                         for sx, sz in ((-1, -1), (1, -1), (1, 1), (-1, 1))])
+                    continue
             if g not in self.mesh_of_go:
                 continue
             box = mesh_aabb(self.ctx, self.sc, self.mesh_of_go[g])
@@ -616,6 +629,74 @@ class SceneModel:
                 w = pos + q_rotate(rot, scl * local)
                 corners.append((w[0], w[2]))
             self.foot[g] = np.array(corners)
+
+    # ---- trigger areas -------------------------------------------------
+
+    def area_collider(self, go):
+        return next((c for c in self.comps.get(go, [])
+                     if self.sc.type_name(c) in ("BoxCollider", "SphereCollider")), None)
+
+    def area_shape(self, go):
+        """("box", 4 world (x, z) corners, height) or ("circle", world (x, z)
+        centre, radius) of trigger area `go`, or None."""
+        col = self.area_collider(go)
+        if col is None or go not in self.tr_of_go:
+            return None
+        d = self.sc.read(col)
+        pos, rot, scl = self.world(self.tr_of_go[go])
+        c = v_arr(d["m_Center"])
+        if self.sc.type_name(col) == "SphereCollider":
+            w = pos + q_rotate(rot, scl * c)
+            return "circle", (float(w[0]), float(w[2])), float(d["m_Radius"]) * float(max(abs(scl[0]), abs(scl[2])))
+        size = v_arr(d["m_Size"])
+        corners = []
+        for sx, sz in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
+            w = pos + q_rotate(rot, scl * (c + np.array((sx * size[0] / 2, 0.0, sz * size[2] / 2))))
+            corners.append((w[0], w[2]))
+        return "box", np.array(corners), float(abs(size[1] * scl[1]))
+
+    def area_size(self, go):
+        """{"width", "depth", "height"} (box) or {"radius"} (circle) in metres."""
+        col = self.area_collider(go)
+        d = self.sc.read(col)
+        _, _, scl = self.world(self.tr_of_go[go])
+        if self.sc.type_name(col) == "SphereCollider":
+            return {"radius": float(d["m_Radius"]) * float(max(abs(scl[0]), abs(scl[2])))}
+        size = v_arr(d["m_Size"]) * np.abs(scl)
+        return {"width": float(size[0]), "height": float(size[1]), "depth": float(size[2])}
+
+    def set_area_size(self, go, **size):
+        """Resize trigger area `go`: width / depth / height for a box (through its
+        scale, as the original missions do), radius for a circle."""
+        col = self.area_collider(go)
+        cur = self.area_size(go)
+        if self.sc.type_name(col) == "SphereCollider":
+            if "radius" in size:
+                d = self.edit(col)
+                d["m_Radius"] = float(d["m_Radius"]) * float(size["radius"]) / max(cur["radius"], 1e-6)
+                self._set(col, d)
+        else:
+            trp = self.tr_of_go[go]
+            t = self.edit(trp)
+            sc = t["m_LocalScale"]
+            for key, axis in (("width", "x"), ("height", "y"), ("depth", "z")):
+                if key in size:
+                    if size[key] <= 0:
+                        raise ValueError("sizes must be greater than 0")
+                    sc[axis] = float(sc[axis]) * float(size[key]) / max(cur[key], 1e-6)
+            self._set(trp, t)
+        self.refresh_subtree(self.tr_of_go[go])
+
+    def area_visible(self, go):
+        return not self.sc.read(self.areas[go])["Invisible_Flag"]
+
+    def set_area_visible(self, go, visible):
+        """Show the trigger area in the game (as a marker) or hide it."""
+        self.set_field(self.areas[go], "Invisible_Flag", not visible)
+        if visible:
+            for c in self.comps.get(go, []):
+                if self.sc.type_name(c) == "MeshRenderer" and not self.sc.read(c)["m_Enabled"]:
+                    self.set_field(c, "m_Enabled", True)
 
     def refresh_subtree(self, trp):
         self.invalidate(trp)
