@@ -180,6 +180,29 @@ class SceneModelTest(unittest.TestCase):
         m.undo()
         self.assertEqual(m.sc.build(), m.sc.raw)
 
+    def test_new_events_get_their_message_text(self):
+        m = SceneModel(self.ctx, SCENE, terrain=None)
+        texts = {}
+        for e in m.events:
+            d = m.sc.read(e)
+            if d["Event_Type"] in (1, 10) and d["Event_Text"]["m_PathID"]:
+                texts.setdefault(d["Event_Type"], d["Event_Text"]["m_PathID"])
+        self.assertEqual(sorted(texts), [1, 10], "the test scene has message and mission complete events")
+        m.begin("events")
+        made = {}
+        for t in (1, 10):
+            ev = m.event_of_go(m.duplicate(m.event_go[m.spawns[0]], offset=None, mirror=False))
+            m.reset_event(ev, t)
+            made[t] = ev
+        m.set_field(made[1], "Event_Type", 10)
+        m.set_field(made[10], "Event_Text", {"m_FileID": 0, "m_PathID": 0})
+        self.assertEqual(m.missing_event_texts(), [made[10]])
+        self.assertEqual(m.repair_event_texts(), 1)
+        m.commit()
+        for ev in made.values():
+            self.assertEqual(m.sc.read(ev)["Event_Text"]["m_PathID"], texts[10])
+        self.assertEqual(m.missing_event_texts(), [])
+
     def test_renamed_route_stays_a_route(self):
         m = SceneModel(self.ctx, SCENE, terrain=None)
         m.begin("route")

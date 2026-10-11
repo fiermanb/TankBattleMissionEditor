@@ -636,9 +636,9 @@ class TextFormDialog(Dialog):
 class TankListDialog(Dialog):
     """Choose several tanks (Shift / Ctrl + click), current ones preselected."""
 
-    def __init__(self, parent, title, items, chosen):
+    def __init__(self, parent, title, items, chosen, noun="tanks"):
         super().__init__(parent, title)
-        tk.Label(self.body, text="Select the tanks (Shift / Ctrl + click for several):", anchor="w").pack(fill="x")
+        tk.Label(self.body, text=f"Select the {noun} (Shift / Ctrl + click for several):", anchor="w").pack(fill="x")
         box = bordered(self.body, fill="both", expand=True, pady=(4, 4))
         self.items = items
         self.lb = tk.Listbox(box, width=60, height=20, bd=0, selectmode="extended", activestyle="none",
@@ -2731,6 +2731,8 @@ class EditorApp:
         try:
             if not os.path.exists(bak):
                 shutil.copy2(m.sc.path, bak)
+            if m.missing_event_texts():
+                self.op("Connect message texts", m.repair_event_texts)
             m.save()
         except PermissionError:
             self.idle()
@@ -3592,6 +3594,52 @@ class EditorApp:
         ttk.Button(self.props, text=f"Choose {title.lower()}...",
                    command=lambda: self.choose_tanks(ev, key, count_key, title)).grid(row=r, column=1, sticky="w",
                                                                                      pady=(0, 4))
+
+    def prop_eventlist(self, title, ev, key, count_key):
+        """Event list of an event (names) with a button to choose the events."""
+        m = self.model
+        owner = {e: m.event_go[e] for e in m.events}
+        names = [m.name(owner[r["m_PathID"]]) for r in m.sc.read(ev).get(key) or []
+                 if r["m_FileID"] == 0 and r["m_PathID"] in owner]
+        self.prop_info(title, ", ".join(names) if names else "(none)")
+        r = self._next()
+        ttk.Button(self.props, text=f"Choose {title.lower()}...",
+                   command=lambda: self.choose_events(ev, key, count_key, title)).grid(row=r, column=1, sticky="w",
+                                                                                      pady=(0, 4))
+
+    def choose_events(self, ev, key, count_key, title):
+        m = self.model
+        items = []
+        for e in m.events:
+            go = m.event_go[e]
+            if e == ev or not m.active(go):
+                continue
+            d = m.sc.read(e)
+            state = "" if d.get("m_Enabled", 1) else "disabled at start"
+            items.append((f"{m.name(go):<28} {EVENT_TYPES.get(d['Event_Type'], d['Event_Type'])!s:<18} {state}", e))
+        chosen = {r["m_PathID"] for r in m.sc.read(ev).get(key) or [] if r["m_FileID"] == 0}
+        res = TankListDialog(self.root, title, items, chosen, noun="events").run()
+        if res is None:
+            return
+        refs = [{"m_FileID": 0, "m_PathID": p} for p in res]
+
+        def do():
+            d = m.edit(ev)
+            d[key] = refs
+            if count_key in d:
+                d[count_key] = len(refs)
+            m._set(ev, d)
+        self.op(f"Set {title.lower()}", do)
+        self.status(f"{title}: {len(refs)} event(s).", "ok")
+
+    def prop_enabled(self, ev):
+        """'Enabled at start' of an event; a disabled event waits for an Enable
+        events event."""
+        m = self.model
+        d = m.sc.read(ev)
+        if "m_Enabled" in d:
+            self.prop_check("Enabled at start", bool(d["m_Enabled"]),
+                            lambda v: self.op("Set enabled at start", m.set_field, ev, "m_Enabled", 1 if v else 0))
 
     def choose_tanks(self, ev, key, count_key, title):
         m = self.model
@@ -4496,6 +4544,7 @@ class EditorApp:
             self.prop_ref_combo("Follow target", [ev], "Follow_Target", exclude=go)
             self.prop_ref_combo("Commander", [ev], "Commander", exclude=go)
             self.prop_sep()
+            self.prop_enabled(ev)
             self.field_rows(ev, SPAWN_FIELDS)
             self.prop_sep()
             self.prop_tanklist("Trigger tanks", ev, "Trigger_Tanks", "Trigger_Num")
@@ -4503,10 +4552,14 @@ class EditorApp:
             ev = m.event_of_go(go)
             d = m.sc.read(ev)
             self.prop_info("Event type", label(EVENT_TYPES, d["Event_Type"]))
+            self.prop_enabled(ev)
             self.field_rows(ev, EVENT_FIELDS)
             self.prop_tanklist("Trigger tanks", ev, "Trigger_Tanks", "Trigger_Num")
             if d["Event_Type"] in (2, 3, 6):
                 self.prop_tanklist("Affected tanks", ev, "Target_Tanks", "Target_Num")
+            if d["Event_Type"] == 13:
+                self.prop_eventlist("Events to enable", ev, "Disabled_Events", "Disabled_Event_Num")
+            self.prop_eventlist("Events to cancel", ev, "Useless_Events", "Useless_Event_Num")
             extra = EVENT_TYPE_FIELDS.get(d["Event_Type"])
             if extra:
                 self.prop_sep()

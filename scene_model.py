@@ -54,6 +54,13 @@ REF_SINGLES = (
     "New_Follow_Target", "Artillery_Target", "Activation_Object", "Trigger_Script",
 )
 PACK_FIELDS = ("WayPoint_Pack", "New_WayPoint_Pack", "Respawn_Point_Pack", "New_Respawn_Point_Pack")
+# the on-screen text object an event writes its message to (Event_Text); the
+# original missions set it on every message and mission complete event, and
+# such an event without it does not run
+EVENT_TEXT_OBJECTS = {2: "Text_Large", 3: "Text_Large", 10: "Text_Large", 11: "Text_Large",
+                      12: "Text_Message (Left)"}
+DEFAULT_EVENT_TEXT = "Text_Event_Message"
+EVENT_TEXT_REQUIRED = (1, 10)
 
 DUPLICATE_OFFSET = 8.0
 HOLE_MARGIN = 2.0
@@ -756,6 +763,8 @@ class SceneModel:
     def set_field(self, pid, key, value):
         d = self.edit(pid)
         d[key] = value
+        if key == "Event_Type" and "Event_Text" in d:
+            d["Event_Text"] = {"m_FileID": 0, "m_PathID": self.event_text_for(value, exclude=pid)}
         self._set(pid, d)
         if key == "Event_Type" or key == "m_IsActive":
             self.reindex()
@@ -1002,6 +1011,48 @@ class SceneModel:
         index = kids.index(after_tr) + 1 if after_tr in kids else None
         return self.new_object(self._unique_name("WayPoint"), pack_tr, wpos, index=index)
 
+    def event_text_for(self, event_type, exclude=None):
+        """Text component for the messages of events of `event_type`: the one the
+        other events of that type in this scene use, else the scene's text object
+        for that kind of message; 0 when the scene has none."""
+        used = {}
+        for e in self.events:
+            d = self.sc.read(e)
+            ref = d.get("Event_Text")
+            if e != exclude and d["Event_Type"] == event_type and ref and ref["m_FileID"] == 0 and ref["m_PathID"]:
+                used[ref["m_PathID"]] = used.get(ref["m_PathID"], 0) + 1
+        if used:
+            return max(used, key=used.get)
+        name = EVENT_TEXT_OBJECTS.get(event_type, DEFAULT_EVENT_TEXT)
+        for g, d in self.go.items():
+            if d["m_Name"] == name:
+                for c in self.comps.get(g, []):
+                    if self.sc.type_name(c) == "MonoBehaviour" and self.script_class(c) == "Text":
+                        return c
+        return 0
+
+    def missing_event_texts(self):
+        """Message and mission complete events without a text object (made by an
+        older editor version); the game skips them."""
+        out = []
+        for e in self.events:
+            d = self.sc.read(e)
+            ref = d.get("Event_Text")
+            if d["Event_Type"] in EVENT_TEXT_REQUIRED and ref is not None and not ref["m_PathID"]:
+                out.append(e)
+        return out
+
+    def repair_event_texts(self):
+        """Give the events of missing_event_texts() their text object. Returns the
+        number of events changed."""
+        n = 0
+        for e in self.missing_event_texts():
+            pid = self.event_text_for(self.sc.read(e)["Event_Type"], exclude=e)
+            if pid:
+                self.set_field(e, "Event_Text", {"m_FileID": 0, "m_PathID": pid})
+                n += 1
+        return n
+
     def reset_event(self, ev, event_type):
         """Make event `ev` a fresh event of the given type: no tanks, objects,
         routes or other events referenced, no message, named after its type."""
@@ -1018,6 +1069,8 @@ class SceneModel:
         for f in ("Event_Message", "Event_Message_JPN"):
             if f in d:
                 d[f] = "New message" if event_type == 1 else ""
+        if "Event_Text" in d:
+            d["Event_Text"] = {"m_FileID": 0, "m_PathID": self.event_text_for(event_type, exclude=ev)}
         self._set(ev, d)
         go = self.event_go.get(ev) or d["m_GameObject"]["m_PathID"]
         base = f"Event ({EVENT_TYPES.get(event_type, 'Event')})"
