@@ -255,6 +255,11 @@ def swatch(kind, colour, size):
         d.polygon([(4, 60), (24, 26), (36, 44), (44, 34), (60, 60)], fill=(140, 120, 80, 255))
     elif kind == "outline":
         d.rectangle((6, 6, 58, 58), outline=c, width=6)
+    elif kind == "navmesh":
+        d.rectangle((6, 6, 58, 58), fill=(150, 160, 110, 255), outline=BLACK, width=2)
+        for poly in ([(8, 8), (30, 8), (30, 30), (8, 30)], [(30, 8), (56, 8), (56, 30), (30, 30)],
+                     [(8, 30), (30, 30), (30, 56), (8, 56)]):
+            d.polygon(poly, fill=(60, 200, 255, 140), outline=(20, 120, 200, 255))
     elif kind == "routelink":
         d.polygon([(10, 10), (30, 20), (10, 30)], fill=(240, 70, 60, 255), outline=BLACK)
         for x in range(26, 52, 8):

@@ -17,7 +17,9 @@ Each backup (backups/<installation>/scenarios/<scene id>/) holds
   - meta.json: source mission, game version and dates,
   - terrain.npz (only for an edited terrain): the weight maps and the
     heightmap; the terrain copy is made again from the original terrain on
-    restore.
+    restore,
+  - for a rebuilt AI route map only its source (meta.json "navmesh"): the
+    route map is derived data and is rebuilt on restore.
 
 A backup can be exported as one .tbscenario file (a zip of these files) and
 imported in another installation: it contains no game assets, only the map and
@@ -253,6 +255,14 @@ class ScenarioBackups:
         folder = self.folder(entry["scene_id"])
         os.makedirs(folder, exist_ok=True)
         terrain = self._backup_terrain(sc, own, entry, folder)
+        navmesh = None
+        for p in sc.all_pids():
+            if sc.type_name(p) == "MonoBehaviour" and sc.script_class(p) == "NavMeshSurface":
+                ref = sc.read(p)["m_NavMeshData"]
+                if ref["m_FileID"] and sc.externals[ref["m_FileID"] - 1] == own:
+                    src = entry.get("navmesh_source") or {}
+                    navmesh = {"source_file": src.get("file"), "source_pid": src.get("pid"),
+                               "source": src.get("desc")}
         tmp = os.path.join(folder, "battle.level.tmp")
         shutil.copyfile(path, tmp)
         os.replace(tmp, os.path.join(folder, "battle.level"))
@@ -264,7 +274,7 @@ class ScenarioBackups:
             "title": mission["Scene_Title"], "briefing": mission["Scene_Briefing"],
             "scene_id": entry["scene_id"], "source": entry.get("source"),
             "battle_scene": entry["battle_scene"], "game_metadata_sha256": ctx.metadata_sha256,
-            "unity_version": ctx.unity_version, "terrain": terrain,
+            "unity_version": ctx.unity_version, "terrain": terrain, "navmesh": navmesh,
             "saved": datetime.datetime.now().isoformat(timespec="seconds")})
         return folder
 
@@ -526,6 +536,49 @@ class ScenarioBackups:
         self.scenarios._save_manifest()
         return []
 
+    def _restore_navmesh(self, info, battle_idx, entry):
+        """Point the restored scene back at its source route map, then rebuild
+        the route map for the restored scene (it is derived data)."""
+        from navmesh_edit import NavMesh
+        from scene_model import SceneModel
+        ctx = self.ctx
+        hit = None
+        if info.get("source_file") and info.get("source_pid") is not None and info.get("source"):
+            hit = self.index.resolve(info["source_file"], info["source_pid"], tuple(info["source"]))
+        level = SceneFile(ctx, ctx.scene_path(battle_idx))
+        surface = next((p for p in level.all_pids() if level.type_name(p) == "MonoBehaviour"
+                        and level.script_class(p) == "NavMeshSurface"), None)
+        if surface is None:
+            return []
+        if hit is None:
+            mission = next((d for _, d in self.scenarios.missions() if d["Scene_ID"] == entry.get("source")), None)
+            src_idx = self.scenarios.scene_index(mission["Battle_Scene_Name"]) if mission else None
+            if src_idx is None:
+                return ["Its AI route map could not be restored: the source mission is not in the game."]
+            source = SceneFile(ctx, ctx.scene_path(src_idx))
+            sp = next((p for p in source.all_pids() if source.type_name(p) == "MonoBehaviour"
+                       and source.script_class(p) == "NavMeshSurface"), None)
+            if sp is None:
+                return ["Its AI route map could not be restored."]
+            r = source.read(sp)["m_NavMeshData"]
+            hit = (source.externals[r["m_FileID"] - 1], r["m_PathID"])
+        d = dict(level.read(surface))
+        d["m_NavMeshData"] = {"m_FileID": level.ensure_external_path(hit[0]), "m_PathID": hit[1]}
+        level.write(surface, d)
+        level.save()
+        model = SceneModel(ctx, battle_idx, terrain="heights")
+        nav = NavMesh(model)
+        tiles, _ = nav.build()
+        model.begin("Rebuild AI route map")
+        nav.write(tiles)
+        model.commit()
+        model.save()
+        for s in self.scenarios.manifest["scenarios"]:
+            if s["scene_id"] == entry["scene_id"]:
+                s["navmesh_source"] = {"file": hit[0], "pid": hit[1], "desc": self.index.describe(*hit)}
+        self.scenarios._save_manifest()
+        return []
+
     def restore(self, folder_name, force=False):
         """Recreate a backed-up scenario in the installed game. Returns
         (menu index, battle index, report lines)."""
@@ -550,6 +603,8 @@ class ScenarioBackups:
         entry = next(c for c in sm.custom if c["battle_index"] == battle_idx)
         if meta.get("terrain"):
             report += self._restore_terrain(folder, meta["terrain"], battle_idx, entry)
+        if meta.get("navmesh"):
+            report += self._restore_navmesh(meta["navmesh"], battle_idx, entry)
         current = sm.mission_for_scene(entry["battle_scene"])[1]
         fields = {k: v for k, v in mission.items() if k not in SKIP_MISSION_FIELDS and k in current
                   and isinstance(v, (bool, int, float, str)) and type(v) is type(current[k])}

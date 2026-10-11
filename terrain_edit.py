@@ -189,8 +189,7 @@ class TerrainPaint:
         self.src_file = sc.externals[ref["m_FileID"] - 1]
         self.td_pid = ref["m_PathID"]
         self.owned = self.src_file == self.own_file
-        self.assets = SceneFile(ctx, os.path.join(ctx.data_dir, self.own_file))
-        holder = self.assets if self.owned else SceneFile(ctx, os.path.join(ctx.data_dir, self.src_file))
+        holder = model.own_assets() if self.owned else SceneFile(ctx, os.path.join(ctx.data_dir, self.src_file))
         td = holder.read(self.td_pid)
         self.tex_pids = [p["m_PathID"] for p in td["m_SplatDatabase"]["m_AlphaTextures"]]
         self.alphas = [read_alpha(holder.read(p)) for p in self.tex_pids]
@@ -201,6 +200,10 @@ class TerrainPaint:
         self.heights_dirty = False
         t = model.terrain
         self.origin, self.size = (t.origin, (t.size_x, t.size_z)) if t else (None, None)
+
+    @property
+    def assets(self):
+        return self.model.own_assets()
 
     @property
     def layer_count(self):
@@ -337,16 +340,15 @@ class TerrainPaint:
         return (r0, r0 + patch[0].shape[0]), (c0, c0 + patch[0].shape[1])
 
     def save(self):
-        """Write the weights into the scenario's terrain copy and save the asset
-        file. Nothing is written while the scenario uses the shared terrain."""
-        if not self.owned or not (self.dirty or self.heights_dirty or self.assets.dirty):
+        """Write the weights and heights into the scenario's terrain copy (the
+        model saves the asset file). Nothing is written while the scenario uses
+        the shared terrain."""
+        if not self.owned or not (self.dirty or self.heights_dirty):
             return False
         for p, a in zip(self.tex_pids, self.alphas):
             self.assets.write(p, write_alpha(self.assets.read(p), a))
         if self.heights_dirty:
             self.assets.write(self.td_pid, with_heights(self.assets.read(self.td_pid), self.heights))
-        self.assets.save()
-        self.assets = SceneFile(self.model.ctx, self.assets.path)
         self.dirty = self.heights_dirty = False
         return True
 

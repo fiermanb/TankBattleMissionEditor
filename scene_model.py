@@ -1163,9 +1163,20 @@ class SceneModel:
         the last save (undoing every change returns to 'not dirty')."""
         return self._marker() != self.saved_marker
 
+    def own_assets(self):
+        """The scenario's own sharedassetsN.assets (terrain copy, rebuilt route
+        map), one shared SceneFile per open scene; saved with the scene."""
+        if getattr(self, "_own_assets", None) is None:
+            self._own_assets = SceneFile(self.ctx, os.path.join(self.ctx.data_dir, f"sharedassets{self.index}.assets"))
+        return self._own_assets
+
     def save(self):
         if getattr(self, "terrain_paint", None) is not None:
             self.terrain_paint.save()
+        own = getattr(self, "_own_assets", None)
+        if own is not None and own.dirty:
+            own.save()
+            self._own_assets = SceneFile(self.ctx, own.path)
         size = self.sc.save()
         self.saved_marker = self._marker()
         return size

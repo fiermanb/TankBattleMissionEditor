@@ -32,6 +32,7 @@ import settings
 from version import APP_NAME, COPYRIGHT, __version__
 from briefing_sync import sync_mission
 from scenario_backup import EXCHANGE_SUFFIX, ScenarioBackups
+from navmesh_edit import NavMesh, decode_tile
 from terrain_edit import FALLOFFS, TerrainPaint
 from object_import import ObjectLibrary, base_name, category, import_object, reconnect_event_refs
 from scenarios import ScenarioManager
@@ -98,11 +99,12 @@ TOC_LAYERS = [
 ] + [(cat, cat, "square", col, "Scenery") for cat, col in CATEGORY_COLOURS.items()] + [
     ("Terrain", "Terrain", "terrain", None, None),
     ("Elevation", "Elevation tint", "elevation", None, "Terrain"),
+    ("NavMesh", "AI route map", "navmesh", None, "Terrain"),
     ("Contours", "Contour lines", "contour", None, "Terrain"),
     ("Deleted", "Deleted objects", "square", COL_HIDDEN, None),
 ]
-TOC_DEFAULT_OFF = {"Deleted", "Elevation", "Contours"}
-TOC_OVERLAYS = {"Elevation", "Contours"}
+TOC_DEFAULT_OFF = {"Deleted", "Elevation", "Contours", "NavMesh"}
+TOC_OVERLAYS = {"Elevation", "Contours", "NavMesh"}
 OBJ_HINT = ("Double-click an item to place it at the map centre, or drag it onto the map. New route: "
             "double-click or drag it, then click its waypoints; Finish, Enter, Esc or right-click ends.")
 DOUBLE_CLICK_MS = 400
@@ -733,6 +735,7 @@ class EditorApp:
         self.root = root
         self._terrain_rev = 0
         self._terrain_view = (None, None)
+        self._navmesh_view = (None, None)
         self._contour_interval = None
         self._paint_timer = None
         self.auto_library = auto_library
@@ -927,6 +930,60 @@ class EditorApp:
             return
         self.status("Starting the game. Close it before saving in the editor again.", "ok")
 
+    def rebuild_navmesh(self):
+        """Rebuild the AI route map of the open custom scenario from its current
+        terrain and objects."""
+        m = self.model
+        if not m:
+            return
+        if m.index not in self.custom_titles:
+            self.status("The AI route map can be rebuilt for custom scenarios only.", "warn", banner=True)
+            return
+        self.busy("Rebuilding the AI route map...")
+        try:
+            nav = NavMesh(m)
+            source = None if nav.owned else (nav.file, nav.pid)
+            tiles, _ = nav.build()
+
+            def do():
+                nav.write(tiles)
+            self.op("Rebuild AI route map", do)
+        except Exception as e:
+            self.idle()
+            self.status(f"Rebuilding the AI route map failed: {e}", "warn", banner=True)
+            return
+        self.idle()
+        if source:
+            entry = next((x for x in self.scenarios.custom if x["battle_index"] == m.index), None)
+            for x in self.scenarios.manifest["scenarios"]:
+                if entry and x["scene_id"] == entry["scene_id"]:
+                    x["navmesh_source"] = {"file": source[0], "pid": source[1],
+                                           "desc": self.backups.index.describe(*source)}
+            self.scenarios._save_manifest()
+        self._navmesh_view = (None, None)
+        self.layers_changed()
+        polys = sum(len(t["polys"]) for t in tiles)
+        self.status(f"AI route map rebuilt: {polys} areas in {len(tiles)} tiles. Save to keep it "
+                    "(Table Of Contents > Terrain > AI route map shows it).", "ok", banner=True)
+
+    def navmesh_polygons(self):
+        """[(world (x, z) points, area code)] of the open scene's route map."""
+        m = self.model
+        try:
+            nav = NavMesh(m)
+        except Exception:
+            return []
+        key = (id(m), nav.file, nav.pid, m.edits)
+        if self._navmesh_view[0] == key:
+            return self._navmesh_view[1]
+        polys = []
+        for t in nav.data["m_NavMeshTiles"]:
+            tile = decode_tile(bytes(t["m_MeshData"]))
+            for p in tile["polys"]:
+                polys.append(([(tile["verts"][i][0], tile["verts"][i][2]) for i in p[:p[13]]], p[14]))
+        self._navmesh_view = (key, polys)
+        return polys
+
     def report_game_update(self, update):
         """Tell the user what a game update (or file verification) changed."""
         lines = ["The game files were replaced since the editor last changed them (game update, or "
@@ -1097,7 +1154,8 @@ class EditorApp:
                         ("Event...", self.add_event, "", "addevent")])
         menu("Scenario", [("New scenario...", self.new_scenario, "", "newscen"),
                           ("Mission text...", self.edit_mission_text),
-                          ("Update briefing screen", self.update_briefing), None,
+                          ("Update briefing screen", self.update_briefing),
+                          ("Rebuild AI route map", self.rebuild_navmesh), None,
                           ("Restore scenarios from backup...", lambda: self.restore_backups()),
                           ("Export scenario...", self.export_scenario),
                           ("Import scenario...", self.import_scenario), None,
@@ -1132,6 +1190,9 @@ class EditorApp:
             "show heights.\n"
             "Routes: right-click a tank > Route to choose its route, or New route from here (then click the "
             "waypoints). Table Of Contents > Waypoints > Tank route links shows which tank uses which route.\n"
+            "Scenario > Rebuild AI route map (custom scenarios): makes the AI's map of drivable ground "
+            "match the scenario's own terrain and objects; Table Of Contents > Terrain > AI route map shows "
+            "it.\n"
             "F5 starts the game (through Steam).\n"
             "Events are shown on the map with the symbol of their type (Events layer); events at the same "
             "spot are laid out side by side. Their position only places the symbol: the game does not use "
@@ -1411,7 +1472,7 @@ class EditorApp:
                     counts["Deleted"] += 1
             counts["Deleted"] += sum(1 for e in m.events if e not in m.spawns and not m.active(m.event_go[e]))
         for k, text, kind, colour, parent in TOC_LAYERS:
-            n = counts[k] if m and k not in ("Terrain", "Elevation", "Contours", "RouteLinks") else None
+            n = counts[k] if m and k not in ("Terrain", "Elevation", "Contours", "RouteLinks", "NavMesh") else None
             if k == "Contours" and self._contour_interval:
                 text += f" ({self._contour_interval:g} m)"
             self.toc.item(k, text=f" {text}" + (f" ({n})" if n is not None else ""))
@@ -4174,6 +4235,17 @@ class EditorApp:
                 size = (max(1, int(round(cx1 - cx0))), max(1, int(round(cy1 - cy0))))
                 part = terrain_img.resize(size, Image.BILINEAR, box=box)
                 img.paste(part, (int(round(cx0)), int(round(cy0))))
+        if self.layer("NavMesh") and self.model:
+            over = Image.new("RGBA", img.size, (0, 0, 0, 0))
+            draw = ImageDraw.Draw(over)
+            for pts, area in self.navmesh_polygons():
+                spts = [v.w2s(x, z) for x, z in pts]
+                xs, ys = [p[0] for p in spts], [p[1] for p in spts]
+                if max(xs) < 0 or min(xs) > v.w or max(ys) < 0 or min(ys) > v.h:
+                    continue
+                fill = (60, 200, 255, 70) if area == 0 else (255, 200, 60, 90)
+                draw.polygon(spts, fill=fill, outline=(20, 120, 200, 160))
+            img = Image.alpha_composite(img.convert("RGBA"), over).convert("RGB")
         if self.layer("Scenery"):
             gos, polys, extra = self.scenery_arrays()
             if len(gos):
