@@ -15,8 +15,9 @@ Each backup (backups/<installation>/scenarios/<scene id>/) holds
   - scripts.json.gz: the field layout of every game script the scene uses,
   - mission.json: the mission's settings and title/briefing,
   - meta.json: source mission, game version and dates,
-  - terrain.npz (only for a painted terrain): the painted weight maps; the
-    terrain copy is made again from the original terrain on restore.
+  - terrain.npz (only for an edited terrain): the weight maps and the
+    heightmap; the terrain copy is made again from the original terrain on
+    restore.
 
 A backup can be exported as one .tbscenario file (a zip of these files) and
 imported in another installation: it contains no game assets, only the map and
@@ -41,7 +42,7 @@ import zipfile
 import numpy as np
 
 from scene_io import SceneFile, layout_tree, script_key
-from terrain_edit import copy_terrain, own_assets_name, read_alpha, terrain_components
+from terrain_edit import copy_terrain, own_assets_name, read_alpha, read_heights, terrain_components
 
 BACKUP_DIR_NAME = "scenarios"
 EXCHANGE_SUFFIX = ".tbscenario"
@@ -282,7 +283,7 @@ class ScenarioBackups:
         td = assets.read(ref["m_PathID"])
         alphas = [read_alpha(assets.read(p["m_PathID"])) for p in td["m_SplatDatabase"]["m_AlphaTextures"]]
         buf = io.BytesIO()
-        np.savez_compressed(buf, *alphas)
+        np.savez_compressed(buf, *alphas, heights=read_heights(td).astype(np.uint16))
         with open(path + ".tmp", "wb") as f:
             f.write(buf.getvalue())
         os.replace(path + ".tmp", path)
@@ -477,7 +478,9 @@ class ScenarioBackups:
         restored scene at it."""
         ctx = self.ctx
         with np.load(os.path.join(folder, "terrain.npz")) as z:
-            alphas = [z[k] for k in sorted(z.files, key=lambda k: int(k.split("_")[-1]))]
+            alphas = [z[k] for k in sorted((k for k in z.files if k.startswith("arr_")),
+                                           key=lambda k: int(k.split("_")[-1]))]
+            heights = z["heights"].astype(np.int32) if "heights" in z.files else None
         hit = None
         if info.get("source_file") and info.get("source_pid") is not None:
             hit = self.index.resolve(info["source_file"], info["source_pid"], tuple(info["source"]))
@@ -501,7 +504,7 @@ class ScenarioBackups:
             fitted.append(np.ascontiguousarray(a))
         own_new = own_assets_name(battle_idx)
         assets = SceneFile(ctx, os.path.join(ctx.data_dir, own_new))
-        new_td, _ = copy_terrain(ctx, assets, hit[0], hit[1], fitted)
+        new_td, _ = copy_terrain(ctx, assets, hit[0], hit[1], fitted, heights)
         assets.save()
         level = SceneFile(ctx, ctx.scene_path(battle_idx))
         if info["own_file"] in level.externals:

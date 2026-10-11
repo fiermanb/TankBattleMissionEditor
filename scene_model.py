@@ -217,6 +217,7 @@ class Terrain:
         self.origin = world_pos
         h = np.asarray(hm["m_Heights"], dtype=np.float32).reshape(self.res, self.res)
         self.heights = h / 32766.0 * scale[1] + world_pos[1]
+        self.height_scale = scale[1]
         self.holes = self._hole_points(hm.get("m_Holes"))
         self.layer_colours, self.layer_names = [], []
         self.image = self._colour(ctx, sf, td["m_SplatDatabase"]) if colour else None
@@ -308,6 +309,13 @@ class Terrain:
         j0, j1 = max(0, int(np.floor(cols[0] * k))), min(n, int(np.ceil(cols[1] * k)))
         if i0 >= i1 or j0 >= j1:
             return
+        return self._compose(alphas, i0, i1, j0, j1)
+
+    def _compose(self, alphas, i0, i1, j0, j1):
+        """Colour image rows i0..i1 (counted from the south) and columns j0..j1
+        from the weights and the relief shading."""
+        n = self.image_n
+        res = alphas[0].shape[0]
         rgb = np.zeros((i1 - i0, j1 - j0, 3))
         weight = np.zeros((i1 - i0, j1 - j0, 1))
         for ti, a in enumerate(alphas):
@@ -328,6 +336,35 @@ class Terrain:
         shade = self.shade[top:bottom, j0:j1][::-1]
         self.image[top:bottom, j0:j1] = np.clip(base * shade[:, :, None], 0, 255).astype(np.uint8)[::-1]
         return (i0, i1), (j0, j1)
+
+    def update_relief(self, heights, rows, cols, alphas):
+        """Take over edited heights (int heightmap values) in heightmap rows and
+        cols (first, last + 1): ground heights, relief shading and colour of
+        that part of the map. Returns the changed image part like recolour()."""
+        res = self.res
+        r0, r1 = max(0, rows[0]), min(res, rows[1])
+        c0, c1 = max(0, cols[0]), min(res, cols[1])
+        self.heights[r0:r1, c0:c1] = (np.asarray(heights[r0:r1, c0:c1], dtype=np.float32) / 32766.0
+                                      * self.height_scale + self.origin[1])
+        if self.image is None:
+            return None
+        n = self.image_n
+        step = max(1, (res - 1) // n)
+        i0 = max(0, (res - 1 - (r1 - 1)) // step - 1)
+        i1 = min(n, (res - 1 - r0) // step + 2)
+        j0, j1 = max(0, c0 // step - 1), min(n, (c1 - 1) // step + 2)
+        if i0 >= i1 or j0 >= j1:
+            return None
+        w0, w1 = max(0, i0 - 1), min(n, i1 + 1)
+        v0, v1 = max(0, j0 - 1), min(n, j1 + 1)
+        flipped = self.heights[::-1, :]
+        win = flipped[w0 * step:w1 * step:step, v0 * step:v1 * step:step]
+        if min(win.shape) < 2:
+            return None
+        gy, gx = np.gradient(win, self.size_x / n)
+        shade = 0.8 + 0.3 * np.clip((gx + gy) * 2.0, -1, 1)
+        self.shade[i0:i1, j0:j1] = shade[i0 - w0:i1 - w0, j0 - v0:j1 - v0]
+        return self._compose(alphas, n - i1, n - i0, j0, j1)
 
     def height_at(self, x, z):
         u = (x - self.origin[0]) / self.size_x * (self.res - 1)

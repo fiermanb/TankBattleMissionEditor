@@ -23,8 +23,10 @@ WHAT IT DOES
   finishes. Right-click > Add here places at the pointer.
 - Table Of Contents: double-click opens a layer's table; right-click
   selects, zooms or shows only that layer.
-- Terrain tab: paint the ground layers of a custom scenario (it gets its
-  own copy of the terrain; the original missions keep theirs).
+- Terrain tab: paint the ground layers and raise, lower, flatten or smooth
+  the ground of a custom scenario (it gets its own copy of the terrain; the
+  original missions keep theirs). The AI's route map does not follow
+  height changes.
 - Tables of spawns, events, waypoints and scenery: double-click a cell to
   edit it.
 - New scenarios from a mission or on an empty terrain (Scenario menu); they

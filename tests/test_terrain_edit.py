@@ -20,7 +20,7 @@ from scenario_backup import ScenarioBackups  # noqa: E402
 from scenarios import ScenarioManager  # noqa: E402
 from scene_io import GameContext, SceneFile  # noqa: E402
 from scene_model import SceneModel  # noqa: E402
-from terrain_edit import TerrainPaint, mip_chain, read_alpha  # noqa: E402
+from terrain_edit import TerrainPaint, lod_tables, mip_chain, read_alpha, read_heights  # noqa: E402
 
 from gamepath import GAME  # noqa: E402
 from test_scenarios import mirror_game, remove_tree  # noqa: E402
@@ -118,6 +118,71 @@ class TerrainPaintTest(unittest.TestCase):
             for a, b in zip(painted, tp3.alphas):
                 self.assertTrue(np.array_equal(a, b))
         self.assertEqual(digest(shared), before)
+
+
+@unittest.skipUnless(os.path.isdir(GAME), "game not installed")
+class HeightEditTest(unittest.TestCase):
+    def test_lod_tables_match_the_game(self):
+        ctx = GameContext(GAME)
+        for f in ("sharedassets1.assets", "sharedassets5.assets"):
+            sf = SceneFile(ctx, os.path.join(ctx.data_dir, f))
+            td = sf.read(next(p for p in sf.objects if sf.type_name(p) == "TerrainData"))
+            hm = td["m_Heightmap"]
+            mm, er = lod_tables(read_heights(td), hm["m_Levels"])
+            self.assertLess(np.abs(mm - np.asarray(hm["m_MinMaxPatchHeights"])).max(), 1e-6, f)
+            self.assertLess(np.abs(er - np.asarray(hm["m_PrecomputedError"])).max(), 1e-6, f)
+
+    def test_sculpt_save_reload_restore(self):
+        tmp = tempfile.mkdtemp(dir=os.path.dirname(GAME))
+        self.addCleanup(remove_tree, tmp)
+        game = os.path.join(tmp, "game")
+        os.makedirs(game)
+        data = mirror_game(game)
+        ctx = GameContext(game)
+        mgr = ScenarioManager(ctx, os.path.join(tmp, "backups"))
+        src = next(p for p, d in mgr.missions() if d["Battle_Scene_Name"] == "20_Open_Field_Intercept_Practice")
+        _, battle_idx = mgr.create(src, "Hills", "x")
+        m = SceneModel(ctx, battle_idx)
+        tp = TerrainPaint(m)
+        m.terrain_paint = tp
+        shared = os.path.join(data, tp.src_file)
+        before = digest(shared)
+        g0 = m.ground(0.0, 0.0)
+        m.begin("raise")
+        made = tp.ensure_copy()
+        for _ in range(5):
+            undo, rows, cols = tp.sculpt(0.0, 0.0, 30.0, "raise", 1.0)
+        m.commit()
+        m.terrain.update_relief(tp.heights, (0, tp.heights.shape[0]), (0, tp.heights.shape[0]), tp.alphas)
+        self.assertGreater(m.ground(0.0, 0.0) - g0, 2.0)
+        target = tp.height_at(200.0, 200.0)
+        tp.sculpt(150.0, 150.0, 20.0, "flatten", 1.0, target)
+        tp.sculpt(-150.0, 150.0, 20.0, "smooth", 1.0)
+        heights = tp.heights.copy()
+        m.save()
+        self.assertEqual(digest(shared), before, "the shared terrain is not changed")
+
+        m2 = SceneModel(ctx, battle_idx)
+        self.assertAlmostEqual(m2.ground(0.0, 0.0), m.ground(0.0, 0.0), places=3)
+        tp2 = TerrainPaint(m2)
+        self.assertTrue(np.array_equal(tp2.heights, heights))
+        td = SceneFile(ctx, os.path.join(data, tp2.own_file)).read(tp2.td_pid)
+        mm, er = lod_tables(heights, td["m_Heightmap"]["m_Levels"])
+        self.assertTrue(np.array_equal(np.asarray(td["m_Heightmap"]["m_MinMaxPatchHeights"], dtype=np.float32),
+                                       mm.astype(np.float32)))
+        self.assertTrue(np.array_equal(np.asarray(td["m_Heightmap"]["m_PrecomputedError"], dtype=np.float32),
+                                       er.astype(np.float32)))
+
+        mgr.manifest["scenarios"][0]["terrain_source"] = {"file": made[0], "pid": made[1], "desc": None}
+        backups = ScenarioBackups(ctx, mgr)
+        mgr.manifest["scenarios"][0]["terrain_source"]["desc"] = backups.index.describe(*made)
+        backups.backup(mgr.custom[0])
+        sid = mgr.custom[0]["scene_id"]
+        mgr.remove_all()
+        _, idx, report = backups.restore(sid, force=True)
+        self.assertFalse(any("could not" in line for line in report), report)
+        tp3 = TerrainPaint(SceneModel(ctx, idx))
+        self.assertTrue(np.array_equal(tp3.heights, heights), "the restored terrain keeps its heights")
 
 
 if __name__ == "__main__":
