@@ -144,6 +144,29 @@ def detect_game():
     return found
 
 
+def game_programs(game_root):
+    """File names of the game's program(s) in its folder (not crash handlers)."""
+    try:
+        return [f for f in os.listdir(game_root) if f.lower().endswith(".exe") and "crash" not in f.lower()]
+    except OSError:
+        return []
+
+
+def game_running(game_root):
+    """True when the game's program is running (Windows task list)."""
+    import subprocess
+    names = {n.lower() for n in game_programs(game_root)}
+    if not names or sys.platform != "win32":
+        return False
+    try:
+        out = subprocess.run(["tasklist", "/FO", "CSV", "/NH"], capture_output=True, text=True, timeout=10,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    running = {line.split('","')[0].strip('"').lower() for line in out.splitlines() if line.startswith('"')}
+    return bool(names & running)
+
+
 def steam_app_id(game_root):
     """Steam app id of an installed game folder (from the appmanifest of its
     Steam library), or None when the folder is not in a Steam library."""

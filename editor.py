@@ -810,6 +810,8 @@ class EditorApp:
         """Restore backed-up scenarios that are not in the game (after a game
         update, or after removing them). items: backup metadata to restore;
         None asks which."""
+        if self.ctx and not self.game_closed("restore scenarios"):
+            return
         if not self.ctx:
             return
         missing = self.backups.missing()
@@ -879,7 +881,7 @@ class EditorApp:
 
     def import_scenario(self):
         """Install a .tbscenario file made with this editor (in any game version)."""
-        if not self.ctx:
+        if not self.ctx or not self.game_closed("import a scenario"):
             return
         path = filedialog.askopenfilename(
             parent=self.root, title="Import scenario",
@@ -915,6 +917,9 @@ class EditorApp:
         if not self.guard_unsaved():
             return
         root = self.ctx.root
+        if settings.game_running(root):
+            self.status("The game is already running.", "warn")
+            return
         app_id = settings.steam_app_id(root)
         try:
             if app_id:
@@ -2614,6 +2619,21 @@ class EditorApp:
         self.custom_titles = {s["battle_index"]: s["title"] for s in self.scenarios.custom}
         self.fill_catalog()
 
+    def game_closed(self, action):
+        """False (with a message) while the game is running: the game reads its
+        scene list only when it starts and may hold files open, so game files
+        are changed only while it is closed."""
+        if self.ctx and settings.game_running(self.ctx.root):
+            messagebox.showwarning(
+                "Game is running",
+                f"Tank Battle Classic is running. Close the game before you {action}: the game reads its "
+                "mission and scene lists only when it starts, so a change made now leaves it with an "
+                "outdated list (a new or changed mission can then load as a grey screen).",
+                parent=self.root)
+            self.status(f"Close the game before you {action}.", "warn")
+            return False
+        return True
+
     def guard_unsaved(self):
         """True when it is fine to continue (saved, discarded or no changes)."""
         if not (self.model and self.model.dirty):
@@ -2698,6 +2718,8 @@ class EditorApp:
         m = self.model
         if not m:
             return False
+        if m.dirty and not self.game_closed("save"):
+            return False
         if not m.dirty:
             self.status("Nothing to save - no changes since the last save.", banner=True)
             return True
@@ -2771,6 +2793,8 @@ class EditorApp:
             self.status(lines[0], "ok", banner=True)
 
     def restore_original(self):
+        if self.ctx and not self.game_closed("restore an original mission"):
+            return
         if not self.model:
             return
         bak = self.backup_path()
@@ -2799,6 +2823,8 @@ class EditorApp:
     # ---- scenarios ---------------------------------------------------
 
     def new_scenario(self):
+        if self.ctx and not self.game_closed("create a scenario"):
+            return
         try:
             missions = self.scenarios.missions()
         except Exception as e:
@@ -2842,6 +2868,8 @@ class EditorApp:
                     "of the mission select screen.", "ok", banner=True)
 
     def edit_mission_text(self):
+        if self.ctx and not self.game_closed("change the mission text"):
+            return
         if not self.model:
             self.status("Open a mission first.", banner=True)
             return
@@ -2870,6 +2898,8 @@ class EditorApp:
         self.status(f"Mission text saved: '{title}'.", "ok", banner=True)
 
     def remove_custom(self):
+        if self.ctx and not self.game_closed("remove scenarios"):
+            return
         removed, kept = self.scenarios.removable()
         other_copy = ("made by another copy of the editor (the installed program or the source version) "
                       "before this copy changed the game; remove them with that copy")
