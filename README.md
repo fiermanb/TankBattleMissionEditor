@@ -40,14 +40,14 @@ button returns to Select / move.
 | Input | Action |
 | --- | --- |
 | Click / Shift+click / Ctrl+click | select / add / toggle |
-| Drag on empty map / drag selection | selection box / move |
+| Drag on empty map / drag selection (Select / move) | selection box / move |
 | Right-click | context menu; finishes a route being drawn |
-| Wheel, middle drag, Space held | zoom, pan, pan (in any tool) |
+| Wheel / middle or right drag, or Space held | zoom / pan (in any tool) |
 | Backspace / Esc while drawing a route | remove the last waypoint / cancel the route |
 | Ctrl+X / C / V | cut / copy / paste (at the pointer) |
 | Del, Ctrl+D, Q / E | delete, duplicate, rotate |
 | Ctrl+Z, Ctrl+S, Ctrl+A | undo, save, select all |
-| Esc | cancel the current action, else back to Select / move, else clear the selection |
+| Esc | cancel a route or selection box in progress, else back to Select / move, else clear the selection |
 
 Help > Controls lists all shortcuts.
 
