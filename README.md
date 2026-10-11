@@ -6,16 +6,19 @@ is not affiliated with the game's developer or publisher. Buy the game from
 https://store.steampowered.com/app/5086560/Tank_Battle_Classic/
 
 
-![Main window: mission map with a selected tank and its route, layers, spawn table and properties](docs/screenshot-main.png)
+![Main window: a custom scenario with a selected tank and its route, layers, spawn table and properties](docs/screenshot-main.png)
 
-![Objects pane: placing scenery objects from other missions](docs/screenshot-objects.png)
+![Events and trigger areas: the Objects pane, an event with its trigger area, and the events table](docs/screenshot-events.png)
+
+![Terrain tools: the Raise tool with its brush, brush options and the elevation tint](docs/screenshot-terrain.png)
 
 ## Start
 
-Run `TankBattleMissionEditor.exe` (or `python editor.py` from source, see Build).
-The editor finds the game in your Steam libraries or asks for its folder
-(File > Select game folder). Double-click a mission in the Catalog.
-**Close the game before saving**; restart it to see changes.
+Unzip the release into a folder of your own and run `TankBattleMissionEditor.exe`
+(or `python editor.py` from source, see Build). The editor finds the game in your
+Steam libraries or asks for its folder (File > Select game folder). Double-click
+a mission in the Catalog. **Close the game before saving**; restart it to see
+changes.
 
 ## What it does
 
@@ -23,52 +26,66 @@ The editor finds the game in your Steam libraries or asks for its folder
 - Tank settings: type, side, AI behaviour, respawns, unit group, follow target
   (allied groups); one tank or many at once.
 - Mission settings (nothing selected): fog, visibility, recon plane.
-- Objects pane: new tanks, routes, waypoints and events, and objects from any
-  mission. Double-click places at the map centre, or drag onto the map. A new
-  route takes its waypoints click by click; Enter, Esc or right-click
-  finishes. Right-click > Add here places at the pointer; Insert in a table
-  adds a row.
+- Objects pane: new tanks, routes, waypoints, events and trigger areas, and
+  objects from any mission. Click an item to choose the Add tool for it; each
+  click on the map then places one. A new route is drawn waypoint by waypoint;
+  right-click, double-click or Enter finishes it. Right-click > Add here places
+  at the pointer; Insert in a table adds a row.
+- Events: messages, mission complete or failed, artillery, AI changes and more.
+  An event starts on a timer, when tanks are destroyed, or when tanks enter a
+  trigger area. It can enable other events (for example the next wave) and
+  cancel others.
+- Trigger areas: boxes or circles on the map. Properties sets their size and
+  the tanks that count: listed tanks, any hostile tank or any friendly tank.
 - Table Of Contents: layer counts; double-click opens the layer's table,
   right-click selects, zooms or shows only that layer.
 - Terrain tools (toolbar): paint the ground layers and raise, lower, flatten or
-  smooth the ground of a custom scenario (it gets its own copy of the terrain;
-  the original missions keep theirs). Brush options are on the Terrain tab;
-  elevation tint and contour lines in the Table Of Contents. The AI's route
-  map does not follow height changes.
-- F5 starts the game.
-- Tables of spawns, events, waypoints and scenery: double-click a cell to
-  edit it.
+  smooth the ground of a custom scenario. The scenario gets its own copy of the
+  terrain; the original missions keep theirs. Brush options are on the Terrain
+  tab; elevation tint and contour lines are in the Table Of Contents.
+- Scenario > Rebuild AI route map: AI tanks then drive around the scenario's
+  own terrain and objects.
+- Tables of spawns, events, waypoints and scenery: double-click a cell to edit
+  it.
 - New scenarios from an existing mission or on an empty terrain (Scenario
-  menu); they appear on a "Custom Missions" page in the game. The briefing
+  menu). They appear on a "Custom Missions" page in the game. The briefing
   screen is updated on save.
+- F5 starts the game. The editor does not change game files while the game
+  runs.
 
-## Controls
+## Tools and controls
+
+One map tool is active at a time, as in GIS software. It stays active until you
+choose another tool. Its toolbar button stays pressed, and the status bar shows
+its instructions. Esc, right-click > Stop, or a second click on the pressed
+button returns to Select / move.
 
 | Input | Action |
 | --- | --- |
 | Click / Shift+click / Ctrl+click | select / add / toggle |
 | Drag on empty map / drag selection | selection box / move |
-| Right-click, middle or right drag, wheel | context menu, pan, zoom |
-| Ctrl+X / C / V | cut / copy / paste (at the cursor) |
+| Right-click | context menu; finishes a route being drawn |
+| Wheel, middle drag, Space held | zoom, pan, pan (in any tool) |
+| Backspace / Esc while drawing a route | remove the last waypoint / cancel the route |
+| Ctrl+X / C / V | cut / copy / paste (at the pointer) |
 | Del, Ctrl+D, Q / E | delete, duplicate, rotate |
 | Ctrl+Z, Ctrl+S, Ctrl+A | undo, save, select all |
-| Esc | cancel the route being drawn, else back to Select / move, else clear the selection |
-| Space (held) | pan in any tool |
+| Esc | cancel the current action, else back to Select / move, else clear the selection |
 
 Help > Controls lists all shortcuts.
 
 ## Backups
 
 The first save of a level keeps the original (File > Restore original).
-Scenario > Remove custom scenarios undoes all scenarios. Backups and settings
-are kept next to the program: `backups\` and `settings.json` in the folder of
-`TankBattleMissionEditor.exe` (Help > Open backup folder). Keep the program in
-a folder of your own: if its folder cannot be written (for example under
-Program Files), they are kept in `%LOCALAPPDATA%\TankBattleMissionEditor`.
-Earlier versions kept them there; the editor moves them next to the program
-once. To update, unzip the new version over the old `TankBattleMissionEditor`
-folder; a version unzipped next to it copies the backups of the old folder.
-Steam's "Verify integrity of game files" also restores everything.
+Scenario > Remove custom scenarios undoes all scenarios. Steam's "Verify
+integrity of game files" also restores everything.
+
+Backups and settings are kept next to the program, in `backups\` and
+`settings.json` (Help > Open backup folder). To update, unzip the new version
+over the old `TankBattleMissionEditor` folder; the backups stay. If the program
+folder cannot be written (for example under Program Files), the editor uses
+`%LOCALAPPDATA%\TankBattleMissionEditor` instead. Data of earlier versions in
+that folder is moved next to the program once.
 
 Custom scenarios are backed up on every save. A game update removes them from
 the game; the editor then offers to restore them, converted to the new game
@@ -81,9 +98,10 @@ this editor, in any game version.
 
 ## Limitations
 
-- AI navigation data is not updated: AI tanks do not route around added or
-  moved buildings.
-- Only existing objects and tank types; terrain cannot be edited.
+- Only existing objects and tank types.
+- Terrain editing and the AI route map rebuild work on custom scenarios only.
+- AI tanks follow changed terrain and added objects only after Scenario >
+  Rebuild AI route map.
 
 ## Build
 
@@ -93,6 +111,11 @@ Requires Python 3.11+ on Windows.
     python editor.py                      # run from source
     python -m unittest discover tests     # tests (need the installed game)
     python packaging/build_exe.py         # standalone executable + release zip
+
+The source version keeps its settings and backups in the folder named in
+`data_location.txt` next to `editor.py` (not in git), else in
+`%LOCALAPPDATA%\TankBattleMissionEditor`. Name the folder of the executable
+there to share its scenarios.
 
 `.github/workflows/release.yml` builds the release on GitHub when a version tag
 is pushed. Code signing through the SignPath Foundation is planned.
