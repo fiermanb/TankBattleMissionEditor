@@ -7,27 +7,34 @@ game's developer or publisher.
 
 START
 -----
-Unzip and run TankBattleMissionEditor.exe (no installation needed). The editor
-finds the game in your Steam libraries or asks for its folder (File > Select
-game folder). Double-click a mission in the Catalog.
+Unzip into a folder of your own (for example Documents or a games folder, not
+Program Files) and run TankBattleMissionEditor.exe (no installation needed).
+The editor finds the game in your Steam libraries or asks for its folder
+(File > Select game folder). Double-click a mission in the Catalog.
 Close the game before saving; restart it to see changes.
+
+UPDATING: unzip the new version over the old TankBattleMissionEditor folder.
+Your backups and settings in that folder stay.
 
 WHAT IT DOES
 ------------
 - Move, rotate, add, copy and delete tanks, waypoints and scenery.
 - Tank settings: type, side, AI behaviour, respawns, unit group, follow target.
 - Mission settings (nothing selected): fog, visibility, recon plane.
-- Objects pane: new tanks, routes, waypoints and events, and objects from
-  any mission. Double-click places at the map centre, or drag onto the map.
-  A new route takes its waypoints click by click; Enter, Esc or right-click
-  finishes. Right-click > Add here places at the pointer.
+- Objects pane: new tanks, routes, waypoints, events, trigger areas and
+  objects from any mission. Click an item to choose the Add tool for it, then
+  click on the map to place one with each click (or drag an item onto the
+  map). A new route takes its waypoints click by click; right-click,
+  double-click or Enter finishes. Esc, right-click > Stop or the Select tool
+  ends a tool. Right-click > Add here places at the pointer.
 - Table Of Contents: double-click opens a layer's table; right-click
   selects, zooms or shows only that layer.
 - Terrain tools (toolbar): paint the ground layers and raise, lower, flatten
   or smooth the ground of a custom scenario (it gets its own copy of the
   terrain; the original missions keep theirs). Brush options are on the
   Terrain tab; elevation tint and contour lines in the Table Of Contents.
-  The AI's route map does not follow height changes.
+  Scenario > Rebuild AI route map makes the AI drive around the scenario's
+  own terrain and objects.
 - F5 starts the game.
 - Tables of spawns, events, waypoints and scenery: double-click a cell to
   edit it.
@@ -46,8 +53,10 @@ BACKUPS
 -------
 The first save of a level keeps the original (File > Restore original).
 Scenario > Remove custom scenarios undoes all scenarios. Backups and settings
-are in %LOCALAPPDATA%\TankBattleMissionEditor. Steam's "Verify integrity of game
-files" also restores everything.
+are kept next to the program, in the backups folder and settings.json
+(Help > Open backup folder). If the program's folder cannot be written, they
+are kept in %LOCALAPPDATA%\TankBattleMissionEditor. Steam's "Verify integrity
+of game files" also restores everything.
 
 Custom scenarios are backed up on every save. A game update removes them from
 the game; the editor then offers to restore them, converted to the new game
@@ -60,9 +69,9 @@ game and this editor, in any game version.
 
 LIMITATIONS
 -----------
-AI tanks do not route around added or moved buildings. Only existing objects
-and tank types; terrain cannot be edited. If a virus scanner blocks the
-program, check it with your scanner and allow it.
+Only existing objects and tank types. AI tanks route around added buildings
+only after Scenario > Rebuild AI route map (custom scenarios). If a virus
+scanner blocks the program, check it with your scanner and allow it.
 
 LICENCE
 -------

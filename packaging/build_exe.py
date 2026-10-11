@@ -184,7 +184,7 @@ def assemble(exe, version, notice_file):
     zpath = folder + ".zip"
     with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
         for f in sorted(os.listdir(folder)):
-            z.write(os.path.join(folder, f), f"{NAME}-{version}-win64/{f}")
+            z.write(os.path.join(folder, f), f"{NAME}/{f}")
     return folder, zpath
 
 

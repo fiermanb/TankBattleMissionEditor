@@ -71,7 +71,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          note="Windows 10/11, 64-bit. Unzip and run TankBattleMissionEditor.exe; needs an installed copy of Tank Battle Classic."
+          note="Windows 10/11, 64-bit. Unzip into a folder of your own and run TankBattleMissionEditor.exe; needs an installed copy of Tank Battle Classic. To update, unzip over the old TankBattleMissionEditor folder: backups and settings there stay."
           if [ "$SIGNING" != "true" ]; then
             note="$note The executable is not code-signed yet: Windows SmartScreen may warn on first start (More info > Run anyway)."
           fi

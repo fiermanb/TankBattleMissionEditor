@@ -1189,7 +1189,19 @@ class EditorApp:
                          ("Events table", lambda: self.show_page("bottom", "events"), "", "events"),
                          ("Waypoints table", lambda: self.show_page("bottom", "waypoints"), "", "addwp"),
                          ("Scenery table", lambda: self.show_page("bottom", "scenery"), "", "objects")])
-        menu("Help", [("Controls", self.show_controls), ("About", self.show_about)])
+        menu("Help", [("Controls", self.show_controls), ("Open backup folder", self.open_backup_folder),
+                      ("About", self.show_about)])
+
+    def open_backup_folder(self):
+        """Help > Open backup folder: the scenario backups of this installation
+        (in the data folder next to the program) in Explorer."""
+        folder = os.path.join(self.backup_dir, "scenarios") if getattr(self, "backup_dir", None) else None
+        if not folder or not os.path.isdir(folder):
+            folder = settings.BACKUP_ROOT if os.path.isdir(settings.BACKUP_ROOT) else settings.DATA_DIR
+        try:
+            os.startfile(folder)
+        except (OSError, AttributeError) as e:
+            self.status(f"The folder could not be opened: {e}. It is {folder}.", "warn", banner=True)
 
     def show_controls(self):
         messagebox.showinfo("Controls", (
@@ -5217,18 +5229,30 @@ def main():
             ctypes.windll.shcore.SetProcessDpiAwareness(1)
         except Exception:
             pass
-    merged, merge_error = [], None
+    merged, moved, adopted, merge_error = [], [], None, None
     try:
+        moved = settings.move_appdata_store()
+        adopted = settings.adopt_sibling_store()
         merged = settings.merge_source_store()
     except Exception as e:
         merge_error = e
     root = tk.Tk()
     app = EditorApp(root, args.game, args.scene)
-    if merged:
-        app.status("The source version now uses the same data folder as the installed program "
-                   f"({settings.DATA_DIR}); its backups were merged into it.", "ok", banner=True)
+    if moved:
+        app.status(f"Settings and backups now live next to the program, in {settings.DATA_DIR} "
+                   f"(moved from {settings.APPDATA_DIR}).", "ok", banner=True)
+    elif adopted:
+        app.status(f"Settings and backups were copied from {adopted} into this program's folder.",
+                   "ok", banner=True)
+    elif merged:
+        app.status("The source version's old backups were merged into the data folder "
+                   f"({settings.DATA_DIR}).", "ok", banner=True)
     elif merge_error is not None:
-        app.status(f"Merging the source version's backups failed: {merge_error}", "warn", banner=True)
+        app.status(f"Moving the backups to the data folder failed: {merge_error}", "warn", banner=True)
+    elif settings.DATA_REASON == "read-only program folder":
+        app.status(f"The program folder cannot be written; settings and backups are kept in "
+                   f"{settings.DATA_DIR}. Move the program to a folder of your own to keep them next to it.",
+                   "warn", banner=True)
     root.mainloop()
 
 

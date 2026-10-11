@@ -4,11 +4,19 @@
 
 The editor works on an installed copy of Tank Battle Classic (Steam). The game
 folder is chosen by the user (File > Select game folder) or detected in the
-Steam libraries, and remembered in settings.json. Settings and backups live in
-%LOCALAPPDATA%/TankBattleMissionEditor, for the packaged executable and the
-source version alike, so both see the same custom scenarios and backups. Older
-source versions kept them next to the source files; merge_source_store() moves
-that store into the shared one once.
+Steam libraries, and remembered in settings.json.
+
+Settings and backups (the data folder) live next to the program: the packaged
+executable keeps settings.json and backups/ in its own folder, so the editor is
+portable and its backups are easy to find. When that folder cannot be written
+(for example under Program Files) they live in %LOCALAPPDATA%/
+TankBattleMissionEditor instead. The source version uses the folder named in
+data_location.txt next to the source files (the folder of the executable in
+use, so both see the same scenarios), else %LOCALAPPDATA%. TBME_DATA_DIR
+overrides all. Versions up to 1.14 kept the data in %LOCALAPPDATA%;
+move_appdata_store() moves it into the new data folder once. Older source
+versions kept it next to the source files; merge_source_store() moves that
+store into the data folder once.
 
 Backups, the scenario list and the object library are kept per installation in
 backups/<folder name>-<hash>/, so several installations never mix.
@@ -24,16 +32,52 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FROZEN = getattr(sys, "frozen", False)
-DATA_DIR = os.environ.get("TBME_DATA_DIR") or os.path.join(
-    os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "TankBattleMissionEditor")
+PROGRAM_DIR = os.path.dirname(os.path.abspath(sys.executable)) if FROZEN else HERE
+APPDATA_DIR = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "TankBattleMissionEditor")
+LOCATION_FILE = os.path.join(HERE, "data_location.txt")
 SOURCE_STORE = os.path.join(HERE, "backups")
 if FROZEN:
-    _OLD_DATA_DIR = os.path.join(os.path.dirname(DATA_DIR), "TankBattleMapEditor")
-    if os.path.isdir(_OLD_DATA_DIR) and not os.path.exists(DATA_DIR):
+    _OLD_DATA_DIR = os.path.join(os.path.dirname(APPDATA_DIR), "TankBattleMapEditor")
+    if os.path.isdir(_OLD_DATA_DIR) and not os.path.exists(APPDATA_DIR):
         try:
-            os.rename(_OLD_DATA_DIR, DATA_DIR)
+            os.rename(_OLD_DATA_DIR, APPDATA_DIR)
         except OSError:
             pass
+
+
+def writable(folder):
+    """True when files can be created in `folder` (made if missing)."""
+    try:
+        os.makedirs(folder, exist_ok=True)
+        probe = os.path.join(folder, f".write-test-{os.getpid()}")
+        with open(probe, "w") as f:
+            f.write("x")
+        os.remove(probe)
+        return True
+    except OSError:
+        return False
+
+
+def choose_data_dir():
+    """(data folder, why) - see the module description."""
+    env = os.environ.get("TBME_DATA_DIR")
+    if env:
+        return env, "environment"
+    if FROZEN:
+        if writable(PROGRAM_DIR):
+            return PROGRAM_DIR, "program"
+        return APPDATA_DIR, "read-only program folder"
+    try:
+        with open(LOCATION_FILE, "r", encoding="utf-8") as f:
+            named = f.read().strip()
+    except OSError:
+        named = ""
+    if named:
+        return named, "data_location.txt"
+    return APPDATA_DIR, "default"
+
+
+DATA_DIR, DATA_REASON = choose_data_dir()
 SETTINGS_PATH = os.path.join(DATA_DIR, "settings.json")
 BACKUP_ROOT = os.path.join(DATA_DIR, "backups")
 GAME_NAME = "Tank Battle Classic"
@@ -258,6 +302,76 @@ def _merge_installation(src, dst):
                 if not os.path.exists(dd) or newer:
                     shutil.rmtree(dd, ignore_errors=True)
                     shutil.copytree(ss, dd)
+        elif name not in ("scenarios.json", "shared") and not os.path.exists(d):
+            if os.path.isdir(s):
+                shutil.copytree(s, d)
+            else:
+                shutil.copy2(s, d)
+
+
+def move_appdata_store():
+    """Move the data folder of versions up to 1.14 (%LOCALAPPDATA%) into the
+    data folder, once: every installation's backups are merged (newest scenario
+    backup and oldest original files win), then the old folder is removed.
+    Returns the installation folders merged; nothing happens when the data
+    folder is the old one."""
+    if os.path.normcase(os.path.abspath(DATA_DIR)) == os.path.normcase(os.path.abspath(APPDATA_DIR)):
+        return []
+    if not os.path.isdir(APPDATA_DIR):
+        return []
+    os.makedirs(BACKUP_ROOT, exist_ok=True)
+    done = []
+    for name in sorted(os.listdir(APPDATA_DIR)):
+        src, dst = os.path.join(APPDATA_DIR, name), os.path.join(DATA_DIR, name)
+        if name == "backups" and os.path.isdir(src):
+            for inst in sorted(os.listdir(src)):
+                s_inst = os.path.join(src, inst)
+                if os.path.isdir(s_inst):
+                    _merge_installation(s_inst, os.path.join(BACKUP_ROOT, inst))
+                    done.append(inst)
+                elif not os.path.exists(os.path.join(BACKUP_ROOT, inst)):
+                    shutil.copy2(s_inst, os.path.join(BACKUP_ROOT, inst))
+        elif not os.path.exists(dst):
+            if os.path.isdir(src):
+                shutil.copytree(src, dst)
+            else:
+                shutil.copy2(src, dst)
+    shutil.rmtree(APPDATA_DIR)
+    return done
+
+
+def adopt_sibling_store():
+    """Executable in a new folder without data of its own (for example a new
+    version unpacked next to the old one): take over the settings and backups
+    of the most recently used editor folder beside it (a copy; the old folder
+    keeps its own). Returns that folder, or None."""
+    if not FROZEN or DATA_REASON != "program" or os.path.isdir(BACKUP_ROOT):
+        return None
+    parent = os.path.dirname(PROGRAM_DIR)
+    found = []
+    try:
+        names = os.listdir(parent)
+    except OSError:
+        return None
+    for name in names:
+        folder = os.path.join(parent, name)
+        backups = os.path.join(folder, "backups")
+        if (name.lower().startswith("tankbattle") and os.path.normcase(folder) != os.path.normcase(PROGRAM_DIR)
+                and os.path.isdir(backups)):
+            stamp = max([os.path.getmtime(backups)] + [os.path.getmtime(os.path.join(backups, n))
+                                                       for n in os.listdir(backups)])
+            found.append((stamp, folder))
+    if not found:
+        return None
+    src = max(found)[1]
+    os.makedirs(BACKUP_ROOT, exist_ok=True)
+    for inst in os.listdir(os.path.join(src, "backups")):
+        s_inst = os.path.join(src, "backups", inst)
+        if os.path.isdir(s_inst):
+            _merge_installation(s_inst, os.path.join(BACKUP_ROOT, inst))
+    if os.path.exists(os.path.join(src, "settings.json")) and not os.path.exists(SETTINGS_PATH):
+        shutil.copy2(os.path.join(src, "settings.json"), SETTINGS_PATH)
+    return src
 
 
 def merge_source_store():

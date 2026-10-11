@@ -1,6 +1,7 @@
-# local data: settings and backups of game files
+# local data: settings and backups of game files, and where the source version keeps them
 settings.json
 backups/
+data_location.txt
 # build output
 packaging/.venv/
 packaging/build/

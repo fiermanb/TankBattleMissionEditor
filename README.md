@@ -61,8 +61,13 @@ Help > Controls lists all shortcuts.
 
 The first save of a level keeps the original (File > Restore original).
 Scenario > Remove custom scenarios undoes all scenarios. Backups and settings
-are in `%LOCALAPPDATA%\TankBattleMissionEditor`, for the executable and the
-source version alike.
+are kept next to the program: `backups\` and `settings.json` in the folder of
+`TankBattleMissionEditor.exe` (Help > Open backup folder). Keep the program in
+a folder of your own: if its folder cannot be written (for example under
+Program Files), they are kept in `%LOCALAPPDATA%\TankBattleMissionEditor`.
+Earlier versions kept them there; the editor moves them next to the program
+once. To update, unzip the new version over the old `TankBattleMissionEditor`
+folder; a version unzipped next to it copies the backups of the old folder.
 Steam's "Verify integrity of game files" also restores everything.
 
 Custom scenarios are backed up on every save. A game update removes them from
