@@ -1075,6 +1075,8 @@ class EditorApp:
         adopted = []
         try:
             adopted = self.scenarios.adopt_unknown({b["scene_id"] for b in self.backups.list()})
+            if not settings.game_running(ctx.root):
+                self.scenarios.consolidate_pages()
         except Exception as e:
             self.status(f"Reading the custom scenarios failed: {e}", "warn")
         self.model = None

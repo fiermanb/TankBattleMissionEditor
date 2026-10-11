@@ -187,6 +187,10 @@ class TwoEditorCopiesTest(unittest.TestCase):
         a.create(src, "Alpha", "made by copy A")
         b.create(src, "Beta", "made by copy B")
 
+        select = SceneModel(ctx, 2, terrain=None)
+        self.assertEqual(sum(1 for g in select.go if select.name(g) == "Mission_List (Custom)"
+                             and select.go[g]["m_IsActive"]), 1, "both copies use one custom page")
+        self.assertEqual(a.consolidate_pages(), 0)
         self.assertEqual(a.adopt_unknown(), ["Beta"])
         self.assertEqual(b.adopt_unknown(), ["Alpha"])
         self.assertEqual(b.adopt_unknown(), [])

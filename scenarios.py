@@ -49,6 +49,7 @@ MISSION_ASSETS = "sharedassets2.assets"
 SELECT_SCENE = 2
 SCENE_DIR = "Assets/Physics Tank Maker/Demo_Scenes/"
 CUSTOM_PREFIX = "90_"
+CUSTOM_PAGE_NAME = "Mission_List (Custom)"
 SHARED_FILES = ("globalgamemanagers", MISSION_ASSETS, f"level{SELECT_SCENE}")
 CUSTOM_PAGE_TITLE = "Custom Missions"
 ROWS_PER_PAGE = 8
@@ -375,10 +376,9 @@ class ScenarioManager:
         fid = m.sc.externals.index(MISSION_ASSETS) + 1
 
         page = None
-        for g in self.manifest.get("pages", []):
-            if g in m.go and self._page_list(m, g) is not None:
-                if len(self._rows(m, g)) < ROWS_PER_PAGE:
-                    page = g
+        for g in self._custom_pages(m, pages):
+            if len(self._rows(m, g)) < ROWS_PER_PAGE:
+                page = g
         m.begin("Add mission row")
         if page is None:
             page = self._new_page(m, pages[-1], mgr)
@@ -403,6 +403,59 @@ class ScenarioManager:
         m.rename(row, f"Text ({slug})")
         m.commit()
         m.reindex()
+
+    def _custom_pages(self, m, pages):
+        """Custom pages among the mission select pages: made by this editor copy
+        (manifest) or by another one (recognised by the page name)."""
+        known = set(self.manifest.get("pages", []))
+        return [g for g in pages if g in m.go and self._page_list(m, g) is not None
+                and (g in known or m.name(g) == CUSTOM_PAGE_NAME)]
+
+    def consolidate_pages(self):
+        """Merge the custom pages of the mission select screen into as few pages
+        as possible (two copies of the editor could each make one). Returns the
+        number of pages removed."""
+        m = SceneModel(self.ctx, SELECT_SCENE, terrain=None)
+        mgr = next(p for p in m.mb if m.script_class(p) == SELECT_MANAGER_SCRIPT)
+        pages = [r["m_PathID"] for r in m.sc.read(mgr)["missionLists"]]
+        custom = self._custom_pages(m, pages)
+        if len(custom) < 2:
+            return 0
+        rows = [r for g in custom for r in self._rows(m, g) if m.go[r]["m_IsActive"]]
+        need = max(1, -(-len(rows) // ROWS_PER_PAGE))
+        if need >= len(custom):
+            return 0
+        self._ensure_shared_backup()
+        m.begin("Merge custom pages")
+        for i, row in enumerate(rows):
+            target = self._page_list(m, custom[i // ROWS_PER_PAGE])
+            trp = m.tr_of_go[row]
+            old = m.tr[trp]["m_Father"]["m_PathID"]
+            new = m.tr_of_go[target]
+            if old == new:
+                continue
+            t = m.edit(old)
+            t["m_Children"] = [c for c in t["m_Children"] if c["m_PathID"] != trp]
+            m._set(old, t)
+            t = m.edit(new)
+            t["m_Children"] = list(t["m_Children"]) + [{"m_FileID": 0, "m_PathID": trp}]
+            m._set(new, t)
+            rt = m.edit(trp)
+            rt["m_Father"] = {"m_FileID": 0, "m_PathID": new}
+            m._set(trp, rt)
+        drop = custom[need:]
+        d = m.edit(mgr)
+        d["missionLists"] = [r for r in d["missionLists"] if r["m_PathID"] not in drop]
+        m._set(mgr, d)
+        for g in drop:
+            gd = m.edit(g)
+            gd["m_IsActive"] = False
+            m._set(g, gd)
+        m.commit()
+        m.save()
+        self.manifest["pages"] = custom[:need]
+        self._save_manifest()
+        return len(drop)
 
     def _page_list(self, m, page_go):
         for c in m.tr[m.tr_of_go[page_go]]["m_Children"]:
@@ -444,7 +497,7 @@ class ScenarioManager:
         d = m.edit(mgr)
         d["missionLists"] = list(d["missionLists"]) + [{"m_FileID": 0, "m_PathID": page}]
         m._set(mgr, d)
-        m.rename(page, "Mission_List (Custom)")
+        m.rename(page, CUSTOM_PAGE_NAME)
         self.manifest.setdefault("pages", []).append(page)
         return page
 
