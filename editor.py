@@ -3260,11 +3260,11 @@ class EditorApp:
         self.refresh_tables()
         self.request_render()
 
-    def op(self, text, fn, *args):
+    def op(self, text, fn, *args, **kwargs):
         m = self.model
         m.begin(text)
         try:
-            result = fn(*args)
+            result = fn(*args, **kwargs)
         except Exception as e:
             m.commit()
             self.status(f"{text} failed: {e}", "warn", banner=True)

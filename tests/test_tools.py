@@ -137,6 +137,27 @@ class ToolTest(unittest.TestCase):
         self.assertEqual(len(m.packs), packs)
         app.set_tool("select")
 
+    def test_trigger_area_size_fields(self):
+        app = self.app
+        m = app.model
+        lib_area = None
+        if app.library.entries is None:
+            app.library.load()
+        if app.library.entries:
+            lib_area = next((e for e in app.library.entries if e["category"] == "Trigger areas"
+                             and e.get("scene") is not None), None)
+        if lib_area is None:
+            self.skipTest("object library not built")
+        root = app.op("Add object", editor.import_object, m, app.library, lib_area, app.view.cx, app.view.cz, True)[0]
+        self.assertIn(root, m.areas)
+        app.selected = root
+        app.refresh_props()
+        key = "radius" if "radius" in m.area_size(root) else "width"
+        app.op("Resize trigger area", m.set_area_size, root, **{key: 33.0})
+        self.assertAlmostEqual(m.area_size(root)[key], 33.0, places=3)
+        app.undo()
+        app.undo()
+
     def test_messages_use_the_message_bar(self):
         app = self.app
         app.status("Test warning", "warn", banner=True)
