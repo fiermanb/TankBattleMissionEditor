@@ -4,14 +4,17 @@
 
 The editor works on an installed copy of Tank Battle Classic (Steam). The game
 folder is chosen by the user (File > Select game folder) or detected in the
-Steam libraries, and remembered in settings.json. Settings and backups live next
-to the source files when run from source, and in %LOCALAPPDATA%/TankBattleMissionEditor
-for the packaged executable.
+Steam libraries, and remembered in settings.json. Settings and backups live in
+%LOCALAPPDATA%/TankBattleMissionEditor, for the packaged executable and the
+source version alike, so both see the same custom scenarios and backups. Older
+source versions kept them next to the source files; merge_source_store() moves
+that store into the shared one once.
 
 Backups, the scenario list and the object library are kept per installation in
 backups/<folder name>-<hash>/, so several installations never mix.
 """
 
+import datetime
 import hashlib
 import json
 import os
@@ -21,10 +24,9 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FROZEN = getattr(sys, "frozen", False)
-if FROZEN:
-    DATA_DIR = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "TankBattleMissionEditor")
-else:
-    DATA_DIR = HERE
+DATA_DIR = os.environ.get("TBME_DATA_DIR") or os.path.join(
+    os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "TankBattleMissionEditor")
+SOURCE_STORE = os.path.join(HERE, "backups")
 if FROZEN:
     _OLD_DATA_DIR = os.path.join(os.path.dirname(DATA_DIR), "TankBattleMapEditor")
     if os.path.isdir(_OLD_DATA_DIR) and not os.path.exists(DATA_DIR):
@@ -147,6 +149,92 @@ def backup_dir_for(game_root):
     tag = hashlib.sha1(norm.encode("utf-8")).hexdigest()[:8]
     name = re.sub(r"[^A-Za-z0-9]+", "_", os.path.basename(norm.rstrip("\\/")) or "game").strip("_")
     return os.path.join(BACKUP_ROOT, f"{name}-{tag}")
+
+
+def _load_json(path, default):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return default
+
+
+def _merge_manifests(dst, src):
+    """Scenario manifest holding the scenarios of both (dst wins on equal ids)."""
+    out = dict(dst)
+    for key in ("scenarios", "orphaned"):
+        have = {s["scene_id"] for s in dst.get(key, [])}
+        out[key] = list(dst.get(key, [])) + [s for s in src.get(key, []) if s["scene_id"] not in have]
+    out["scenarios"].sort(key=lambda s: s.get("battle_index", 0))
+    out["pages"] = list(dict.fromkeys(list(dst.get("pages", [])) + list(src.get("pages", []))))
+    bases = [b for b in (dst.get("base_scene_count"), src.get("base_scene_count")) if b is not None]
+    out["base_scene_count"] = min(bases) if bases else None
+    return out
+
+
+def _merge_installation(src, dst):
+    """Merge one installation's store from the source version (src) into the
+    shared store (dst)."""
+    if not os.path.isdir(dst):
+        shutil.copytree(src, dst)
+        return
+    m_src = _load_json(os.path.join(src, "scenarios.json"), {})
+    m_dst = _load_json(os.path.join(dst, "scenarios.json"), {})
+    # the shared game files of the copy that changed the game first are the true originals
+    src_shared, dst_shared = os.path.join(src, "shared"), os.path.join(dst, "shared")
+    src_base, dst_base = m_src.get("base_scene_count"), m_dst.get("base_scene_count")
+    if os.path.isdir(src_shared) and os.listdir(src_shared) and (
+            not os.path.isdir(dst_shared) or not os.listdir(dst_shared)
+            or (src_base is not None and (dst_base is None or src_base < dst_base))):
+        shutil.rmtree(dst_shared, ignore_errors=True)
+        shutil.copytree(src_shared, dst_shared)
+    if m_src or m_dst:
+        merged = _merge_manifests(m_dst, m_src)
+        with open(os.path.join(dst, "scenarios.json"), "w", encoding="utf-8") as f:
+            json.dump(merged, f, indent=2)
+    for name in os.listdir(src):
+        s, d = os.path.join(src, name), os.path.join(dst, name)
+        if re.fullmatch(r"level\d+\.orig", name):
+            if not os.path.exists(d) or os.path.getmtime(s) < os.path.getmtime(d):
+                shutil.copy2(s, d)
+        elif name in ("object_library.json", "game.json"):
+            if not os.path.exists(d):
+                shutil.copy2(s, d)
+        elif name.startswith("before-update-") and os.path.isdir(s):
+            target = d if not os.path.exists(d) else d + "-source"
+            if not os.path.exists(target):
+                shutil.copytree(s, target)
+        elif name == "scenarios" and os.path.isdir(s):
+            os.makedirs(d, exist_ok=True)
+            for sid in os.listdir(s):
+                ss, dd = os.path.join(s, sid), os.path.join(d, sid)
+                newer = _load_json(os.path.join(ss, "meta.json"), {}).get("saved", "") > \
+                    _load_json(os.path.join(dd, "meta.json"), {}).get("saved", "")
+                if not os.path.exists(dd) or newer:
+                    shutil.rmtree(dd, ignore_errors=True)
+                    shutil.copytree(ss, dd)
+
+
+def merge_source_store():
+    """Merge the store of older source versions (backups/ next to the source
+    files) into the shared store, once. The old store is then moved, unchanged,
+    to legacy-source-backups-<date> in the shared data folder. Returns the
+    installation folders merged."""
+    if FROZEN or not os.path.isdir(SOURCE_STORE) or os.path.normcase(SOURCE_STORE) == os.path.normcase(BACKUP_ROOT):
+        return []
+    os.makedirs(BACKUP_ROOT, exist_ok=True)
+    done = []
+    for name in sorted(os.listdir(SOURCE_STORE)):
+        src = os.path.join(SOURCE_STORE, name)
+        if os.path.isdir(src):
+            _merge_installation(src, os.path.join(BACKUP_ROOT, name))
+            done.append(name)
+    old_settings = os.path.join(HERE, "settings.json")
+    if os.path.exists(old_settings) and not os.path.exists(SETTINGS_PATH):
+        shutil.copy2(old_settings, SETTINGS_PATH)
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    shutil.move(SOURCE_STORE, os.path.join(DATA_DIR, f"legacy-source-backups-{stamp}"))
+    return done
 
 
 def migrate_legacy_backups(game_root, scene_names):

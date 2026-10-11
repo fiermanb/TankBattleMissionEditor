@@ -86,18 +86,23 @@ class ScenarioManager:
     def custom(self):
         return list(self.manifest["scenarios"])
 
-    def adopt_unknown(self):
-        """Add custom scenarios that are in the game but not in this manifest:
-        scenarios made by another copy of the editor (the installed program and
-        the source version keep separate manifests). Every scenario the editor
-        makes has a battle scene named "90_..."; the original missions have
-        none. Returns the titles adopted."""
+    def adopt_unknown(self, backed_up=()):
+        """Add custom scenarios that are in the game but not in this manifest
+        (made by an older editor version or another copy of the editor). A
+        mission is custom when a scenario backup with its id exists (backed_up)
+        or its battle scene is named "90_..." (the editor names every scenario
+        so; the original missions have no such name). Returns the titles
+        adopted."""
         known = {s["scene_id"] for s in self.manifest["scenarios"]}
+        backed_up = set(backed_up)
         missions = self.missions()
-        originals = [d for _, d in missions if not d["Battle_Scene_Name"].startswith(CUSTOM_PREFIX)]
+
+        def is_custom(d):
+            return d["Battle_Scene_Name"].startswith(CUSTOM_PREFIX) or d["Scene_ID"] in backed_up
+        originals = [d for _, d in missions if not is_custom(d)]
         adopted = []
         for pid, d in missions:
-            if not d["Battle_Scene_Name"].startswith(CUSTOM_PREFIX) or d["Scene_ID"] in known:
+            if not is_custom(d) or d["Scene_ID"] in known:
                 continue
             menu_idx, battle_idx = self.scene_index(d["Menu_Scene_Name"]), self.scene_index(d["Battle_Scene_Name"])
             if menu_idx is None or battle_idx is None:

@@ -975,7 +975,7 @@ class EditorApp:
             self.status(f"Checking the backups failed: {e}", "warn")
         adopted = []
         try:
-            adopted = self.scenarios.adopt_unknown()
+            adopted = self.scenarios.adopt_unknown({b["scene_id"] for b in self.backups.list()})
         except Exception as e:
             self.status(f"Reading the custom scenarios failed: {e}", "warn")
         self.model = None
@@ -4503,8 +4503,18 @@ def main():
             ctypes.windll.shcore.SetProcessDpiAwareness(1)
         except Exception:
             pass
+    merged, merge_error = [], None
+    try:
+        merged = settings.merge_source_store()
+    except Exception as e:
+        merge_error = e
     root = tk.Tk()
-    EditorApp(root, args.game, args.scene)
+    app = EditorApp(root, args.game, args.scene)
+    if merged:
+        app.status("The source version now uses the same data folder as the installed program "
+                   f"({settings.DATA_DIR}); its backups were merged into it.", "ok", banner=True)
+    elif merge_error is not None:
+        app.status(f"Merging the source version's backups failed: {merge_error}", "warn", banner=True)
     root.mainloop()
 
 
