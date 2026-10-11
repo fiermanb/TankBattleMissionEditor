@@ -165,5 +165,53 @@ class ScenarioTest(unittest.TestCase):
         self.assertIsNone(ScenarioManager(ctx, bdir).check_game_update(), "reported only once")
 
 
+@unittest.skipUnless(os.path.isdir(GAME), "game not installed")
+class TwoEditorCopiesTest(unittest.TestCase):
+    """The installed program and the source version keep separate manifests for
+    the same game; each must recognise the other's scenarios and remove only
+    what it can remove consistently."""
+
+    def test_adopt_and_remove(self):
+        tmp = tempfile.mkdtemp(dir=os.path.dirname(GAME))
+        self.addCleanup(remove_tree, tmp)
+        game = os.path.join(tmp, "game")
+        os.makedirs(game)
+        data = mirror_game(game)
+        ctx = GameContext(game)
+        a = ScenarioManager(ctx, os.path.join(tmp, "copy_a"))
+        b = ScenarioManager(ctx, os.path.join(tmp, "copy_b"))
+        for m in (a, b):
+            m.check_game_update()
+        existing = set(a.adopt_unknown()) | set(b.adopt_unknown())
+        src = next(p for p, d in a.missions() if d["Battle_Scene_Name"] == "10_Urban_Area_Close_Combat_Basic")
+        a.create(src, "Alpha", "made by copy A")
+        b.create(src, "Beta", "made by copy B")
+
+        self.assertEqual(a.adopt_unknown(), ["Beta"])
+        self.assertEqual(b.adopt_unknown(), ["Alpha"])
+        self.assertEqual(b.adopt_unknown(), [])
+        alpha = next(s for s in b.custom if s["title"] == "Alpha")
+        self.assertEqual(alpha["source"], "Urban_Area_Close_Combat_Basic")
+
+        removed, kept = b.removable()
+        self.assertEqual([s["title"] for s in removed], ["Beta"])
+        self.assertEqual({s["title"] for s in kept}, existing | {"Alpha"})
+        self.assertEqual(set(b.remove_all()), existing | {"Alpha"})
+        ctx.reload_build_settings()
+        for i in range(len(ctx.scene_names)):
+            self.assertTrue(os.path.exists(os.path.join(data, f"level{i}")), f"level{i} is registered")
+        self.assertIsNotNone(a.mission_for_scene("90_Alpha"))
+        self.assertIsNone(a.mission_for_scene("90_Beta"))
+
+        self.assertIsNone(a.check_game_update(), "a removal by the other copy is not a game update")
+        self.assertEqual({s["title"] for s in a.custom}, existing | {"Alpha"})
+        self.assertTrue(a.has_changes(), "copy A keeps its backups of the shared files")
+        self.assertEqual(set(a.remove_all()), existing)
+        ctx.reload_build_settings()
+        self.assertIsNone(a.mission_for_scene("90_Alpha"))
+        for i in range(len(ctx.scene_names)):
+            self.assertTrue(os.path.exists(os.path.join(data, f"level{i}")), f"level{i} is registered")
+
+
 if __name__ == "__main__":
     unittest.main()

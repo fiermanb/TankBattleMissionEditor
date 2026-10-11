@@ -973,6 +973,11 @@ class EditorApp:
             update = self.scenarios.check_game_update()
         except OSError as e:
             self.status(f"Checking the backups failed: {e}", "warn")
+        adopted = []
+        try:
+            adopted = self.scenarios.adopt_unknown()
+        except Exception as e:
+            self.status(f"Reading the custom scenarios failed: {e}", "warn")
         self.model = None
         self.selected = None
         self._base_key = None
@@ -989,6 +994,9 @@ class EditorApp:
         if update:
             self.report_game_update(update)
         self.backup_unprotected()
+        if adopted:
+            self.status(f"Recognised {len(adopted)} custom scenario(s) made by another copy of the editor: "
+                        + ", ".join(adopted) + ".", "ok")
         if ctx.verify_layouts:
             self.status("Game updated: " + ", ".join(ctx.affected_script_names()) + " changed or new; objects "
                         "using these scripts cannot be edited until the editor is updated. Everything else "
@@ -2631,13 +2639,22 @@ class EditorApp:
         self.status(f"Mission text saved: '{title}'.", "ok", banner=True)
 
     def remove_custom(self):
+        removed, kept = self.scenarios.removable()
+        other_copy = ("made by another copy of the editor (the installed program or the source version) "
+                      "before this copy changed the game; remove them with that copy")
         if not self.scenarios.has_changes():
-            self.status("There are no custom scenarios or mission text changes to remove.", banner=True)
+            if kept:
+                self.status("The custom scenarios here were " + other_copy + ".", "warn", banner=True)
+            else:
+                self.status("There are no custom scenarios or mission text changes to remove.", banner=True)
             return
-        n = len(self.scenarios.custom)
-        if not messagebox.askyesno("Remove custom scenarios",
-                                   f"Remove all {n} custom scenario(s) and undo mission text changes?",
-                                   parent=self.root):
+        n = len(removed)
+        text = f"Remove {n} custom scenario(s) and undo mission text changes?"
+        if removed:
+            text += "\n\nRemoved: " + ", ".join(s["title"] for s in removed)
+        if kept:
+            text += "\n\nKept: " + ", ".join(s["title"] for s in kept) + " (" + other_copy + ")."
+        if not messagebox.askyesno("Remove custom scenarios", text, parent=self.root):
             return
         if not self.guard_unsaved():
             return
@@ -2665,7 +2682,8 @@ class EditorApp:
         self.refresh_scenes()
         self.update_title()
         self.status(f"Removed {n} custom scenario(s) and restored the mission files. Their backups are kept: "
-                    "Scenario > Restore scenarios from backup brings them back.", "ok", banner=True)
+                    "Scenario > Restore scenarios from backup brings them back."
+                    + (f" Kept: {', '.join(s['title'] for s in kept)}." if kept else ""), "ok", banner=True)
 
     # ---- objects -----------------------------------------------------
 

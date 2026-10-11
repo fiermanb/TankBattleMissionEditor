@@ -48,6 +48,7 @@ SELECT_BUTTON_SCRIPT = "Mission_Select_Button_CS"
 MISSION_ASSETS = "sharedassets2.assets"
 SELECT_SCENE = 2
 SCENE_DIR = "Assets/Physics Tank Maker/Demo_Scenes/"
+CUSTOM_PREFIX = "90_"
 SHARED_FILES = ("globalgamemanagers", MISSION_ASSETS, f"level{SELECT_SCENE}")
 CUSTOM_PAGE_TITLE = "Custom Missions"
 ROWS_PER_PAGE = 8
@@ -84,6 +85,34 @@ class ScenarioManager:
     @property
     def custom(self):
         return list(self.manifest["scenarios"])
+
+    def adopt_unknown(self):
+        """Add custom scenarios that are in the game but not in this manifest:
+        scenarios made by another copy of the editor (the installed program and
+        the source version keep separate manifests). Every scenario the editor
+        makes has a battle scene named "90_..."; the original missions have
+        none. Returns the titles adopted."""
+        known = {s["scene_id"] for s in self.manifest["scenarios"]}
+        missions = self.missions()
+        originals = [d for _, d in missions if not d["Battle_Scene_Name"].startswith(CUSTOM_PREFIX)]
+        adopted = []
+        for pid, d in missions:
+            if not d["Battle_Scene_Name"].startswith(CUSTOM_PREFIX) or d["Scene_ID"] in known:
+                continue
+            menu_idx, battle_idx = self.scene_index(d["Menu_Scene_Name"]), self.scene_index(d["Battle_Scene_Name"])
+            if menu_idx is None or battle_idx is None:
+                continue
+            source = next((o["Scene_ID"] for o in originals
+                           if o.get("Preview_Textures") == d.get("Preview_Textures")), None)
+            self.manifest["scenarios"].append({
+                "title": d["Scene_Title"], "scene_id": d["Scene_ID"], "menu_scene": d["Menu_Scene_Name"],
+                "battle_scene": d["Battle_Scene_Name"], "menu_index": menu_idx, "battle_index": battle_idx,
+                "mission_asset": pid, "source": source, "adopted": True})
+            adopted.append(d["Scene_Title"])
+        if adopted:
+            self.manifest["scenarios"].sort(key=lambda s: s["battle_index"])
+            self._save_manifest()
+        return adopted
 
     # ---- mission assets ----------------------------------------------
 
@@ -175,7 +204,7 @@ class ScenarioManager:
         n = 0
         while True:
             slug = base if n == 0 else f"{base}_{n}"
-            battle = f"90_{slug}"
+            battle = f"{CUSTOM_PREFIX}{slug}"
             if battle.lower() not in existing and slug.lower() not in ids:
                 return slug, battle, battle + "_Menu"
             n += 1
@@ -415,7 +444,12 @@ class ScenarioManager:
         if stored is None:
             stale = bool(orphaned)
         else:
-            stale = stored.get("metadata_sha256") != self.ctx.metadata_sha256 or bool(orphaned)
+            stale = stored.get("metadata_sha256") != self.ctx.metadata_sha256
+            if orphaned and not stale:
+                # same game version: removed by another copy of the editor, not by an update
+                self.manifest["scenarios"] = [s for s in self.manifest["scenarios"] if s not in orphaned]
+                self._save_manifest()
+                orphaned = []
         report = None
         if stale:
             archive = None
@@ -466,12 +500,46 @@ class ScenarioManager:
     def has_changes(self):
         return any(os.path.exists(os.path.join(self.shared_dir, n + ".orig")) for n in SHARED_FILES)
 
+    def _original_scene_names(self):
+        """Scene names registered in the backed-up globalgamemanagers (the state
+        before this editor copy's first change), or None without a backup."""
+        path = os.path.join(self.shared_dir, "globalgamemanagers.orig")
+        if not os.path.exists(path):
+            return None
+        sf = SceneFile(self.ctx, path)
+        bpid = next(p for p in sf.all_pids() if sf.type_name(p) == "BuildSettings")
+        return {os.path.splitext(os.path.basename(p))[0] for p in sf.read(bpid)["scenes"]}
+
+    def removable(self):
+        """(scenarios that Remove custom scenarios removes, scenarios it keeps).
+        Kept are scenarios that were already in the game before this editor copy
+        backed up the shared files (made by another copy of the editor)."""
+        before = self._original_scene_names()
+        if before is None:
+            return [], list(self.manifest["scenarios"])
+        out, kept = [], []
+        for s in self.manifest["scenarios"]:
+            (kept if s["battle_scene"] in before else out).append(s)
+        return out, kept
+
     def remove_all(self):
-        """Restore the shared files and delete every added scene file."""
-        if self.manifest.get("scenarios") and not all(
+        """Restore the shared files and delete every added scene file. Returns
+        the titles of scenarios kept (see removable())."""
+        _, kept = self.removable()
+        if self.manifest.get("scenarios") and len(kept) == len(self.manifest["scenarios"]) and not all(
                 os.path.exists(os.path.join(self.shared_dir, n + ".orig")) for n in SHARED_FILES):
-            raise ValueError("the backups of the shared game files are missing (the game was updated after "
-                             "these scenarios were made); use Steam's 'Verify integrity of game files'")
+            raise ValueError("these scenarios were made by another copy of the editor (the installed program "
+                             "or the source version); remove them with that copy")
+        path = os.path.join(self.shared_dir, "globalgamemanagers.orig")
+        if os.path.exists(path):
+            sf = SceneFile(self.ctx, path)
+            bpid = next(p for p in sf.all_pids() if sf.type_name(p) == "BuildSettings")
+            gone = [os.path.splitext(os.path.basename(p))[0] for i, p in enumerate(sf.read(bpid)["scenes"])
+                    if not os.path.exists(os.path.join(self.ctx.data_dir, f"level{i}"))]
+            if gone:
+                raise ValueError("the game's mission list changed since this copy of the editor backed it up "
+                                 f"({', '.join(gone[:3])} no longer exist); use Steam's 'Verify integrity of "
+                                 "game files' to reset the game")
         base = self.manifest.get("base_scene_count")
         self._restore_shared_files()
         if base is not None:
@@ -488,9 +556,10 @@ class ScenarioManager:
             p = os.path.join(self.shared_dir, name + ".orig")
             if os.path.exists(p):
                 os.remove(p)
-        self.manifest = {"base_scene_count": None, "scenarios": [], "pages": []}
+        self.manifest = {"base_scene_count": None, "scenarios": kept, "pages": []}
         self._save_manifest()
         self._refresh_context()
+        return [s["title"] for s in kept]
 
     def _refresh_context(self):
         self.ctx.reload_build_settings()
