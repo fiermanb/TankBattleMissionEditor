@@ -203,6 +203,14 @@ class SceneModelTest(unittest.TestCase):
             self.assertEqual(m.sc.read(ev)["Event_Text"]["m_PathID"], texts[10])
         self.assertEqual(m.missing_event_texts(), [])
 
+        self.assertEqual(m.count_mismatches(), [])
+        m.begin("counts")
+        m.set_field(made[1], "Disabled_Event_Num", 1)
+        self.assertEqual(m.count_mismatches(), [made[1]])
+        self.assertEqual(m.repair_counts(), 1)
+        m.commit()
+        self.assertEqual(m.sc.read(made[1])["Disabled_Event_Num"], 0)
+
     def scene_named(self, label):
         return next(i for i in range(len(self.ctx.scene_names)) if self.ctx.scene_label(i) == label)
 

@@ -38,7 +38,7 @@ from object_import import ObjectLibrary, base_name, category, import_object, rec
 from scenarios import ScenarioManager
 from scene_io import GameContext
 from scene_model import (
-    EVENT_TYPES, RELATIONSHIPS, TRIGGER_TYPES, SceneModel, heading_of, label, tank_display,
+    EVENT_TYPES, OPERATORS, RELATIONSHIPS, TRIGGER_SETTINGS, TRIGGER_TYPES, SceneModel, heading_of, label, tank_display,
 )
 
 
@@ -161,14 +161,14 @@ SPAWN_FIELDS = [
 EVENT_FIELDS = [
     ("Trigger", "Trigger_Type", TRIGGER_TYPES),
     ("Trigger time (s)", "Trigger_Time", "float"),
-    ("Trigger setting", "Trigger_Setting_Type", "int"),
-    ("Operator", "Operator_Type", "int"),
+    ("Trigger tanks needed", "Operator_Type", OPERATORS),
     ("All triggers needed", "All_Trigger_Flag", "bool"),
     ("Necessary count", "Necessary_Num", "int"),
     ("Message", "Event_Message", "text"),
     ("Message (JPN)", "Event_Message_JPN", "text"),
     ("Message time (s)", "Event_Message_Time", "float"),
 ]
+AREA_FIELDS = [("Tanks that count", "Trigger_Setting_Type", TRIGGER_SETTINGS)]
 EVENT_TYPE_FIELDS = {
     4: [("Artillery shells", "Artillery_Num", "int")],
     7: [("New visibility (m)", "Visibility", "float"),
@@ -2737,6 +2737,8 @@ class EditorApp:
                 shutil.copy2(m.sc.path, bak)
             if m.missing_event_texts():
                 self.op("Connect message texts", m.repair_event_texts)
+            if m.count_mismatches():
+                self.op("Correct event list counts", m.repair_counts)
             m.save()
         except PermissionError:
             self.idle()
@@ -4630,6 +4632,7 @@ class EditorApp:
             self.prop_sep()
             self.prop_tanklist("Trigger tanks", ev, "Trigger_Tanks", "Trigger_Num")
             if m.sc.read(ev)["Trigger_Type"] == 2:
+                self.field_rows(ev, AREA_FIELDS)
                 self.prop_arealist(ev)
         elif kind == "event":
             ev = m.event_of_go(go)
@@ -4639,6 +4642,7 @@ class EditorApp:
             self.field_rows(ev, EVENT_FIELDS)
             self.prop_tanklist("Trigger tanks", ev, "Trigger_Tanks", "Trigger_Num")
             if d["Trigger_Type"] == 2:
+                self.field_rows(ev, AREA_FIELDS)
                 self.prop_arealist(ev)
             if d["Event_Type"] in (2, 3, 6):
                 self.prop_tanklist("Affected tanks", ev, "Target_Tanks", "Target_Num")

@@ -40,7 +40,11 @@ EVENT_TYPES = {
     12: "Activate object",
     13: "Enable events",
 }
-TRIGGER_TYPES = {0: "Timer", 1: "Tanks destroyed", 2: "Trigger collider"}
+TRIGGER_TYPES = {0: "Timer", 1: "Tanks destroyed", 2: "Tank in trigger area"}
+# confirmed in game (trigger test, 2026-10-11): the setting selects the tanks an
+# area trigger reacts to; for 'tanks destroyed' triggers setting 1 behaved as 0
+TRIGGER_SETTINGS = {0: "Listed tanks", 1: "Any hostile tank", 2: "Any friendly tank"}
+OPERATORS = {0: "All listed tanks", 1: "Any listed tank"}
 RELATIONSHIPS = {0: "Friendly", 1: "Hostile"}
 
 REF_LISTS = {
@@ -1133,6 +1137,21 @@ class SceneModel:
                 self.set_field(e, "Event_Text", {"m_FileID": 0, "m_PathID": pid})
                 n += 1
         return n
+
+    def count_mismatches(self):
+        """Events whose 'events to enable' count is larger than the list; the
+        game then stops the event when it fires (the original missions never
+        have this, unlike a larger 'events to cancel' count, which is common)."""
+        return [e for e in self.events
+                if self.sc.read(e).get("Disabled_Event_Num", 0) > len(self.sc.read(e).get("Disabled_Events") or [])]
+
+    def repair_counts(self):
+        """Set the counts of count_mismatches() to their list length. Returns the
+        number of events changed."""
+        bad = self.count_mismatches()
+        for e in bad:
+            self.set_field(e, "Disabled_Event_Num", len(self.sc.read(e).get("Disabled_Events") or []))
+        return len(bad)
 
     def reset_event(self, ev, event_type):
         """Make event `ev` a fresh event of the given type: no tanks, objects,
