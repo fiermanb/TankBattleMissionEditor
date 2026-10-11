@@ -75,7 +75,9 @@ class ScenarioTest(unittest.TestCase):
             ctx = GameContext(game)
             base = len(ctx.scene_names)
             sel0 = SceneModel(ctx, 2)
-            pages0 = len(sel0.sc.read(next(p for p in sel0.mb if sel0.script_class(p) == "Mission_Select_Manager_CS"))["missionLists"])
+            lists0 = sel0.sc.read(next(p for p in sel0.mb if sel0.script_class(p) == "Mission_Select_Manager_CS"))["missionLists"]
+            pages0 = len(lists0)
+            has_custom_page = any(sel0.name(r["m_PathID"]) == "Mission_List (Custom)" for r in lists0)
             mgr = ScenarioManager(ctx, os.path.join(tmp, "backups"))
             src_pid = next(p for p, d in mgr.missions() if d["Battle_Scene_Name"] == "10_Urban_Area_Close_Combat_Basic")
 
@@ -99,7 +101,8 @@ class ScenarioTest(unittest.TestCase):
             sel = SceneModel(ctx, 2)
             mgr_mb = next(p for p in sel.mb if sel.script_class(p) == "Mission_Select_Manager_CS")
             pages = sel.sc.read(mgr_mb)["missionLists"]
-            self.assertEqual(len(pages), pages0 + 1)
+            self.assertEqual(len(pages), pages0 + (0 if has_custom_page else 1),
+                             "a new scenario joins an existing custom page")
             rows = [p for p in sel.mb if sel.script_class(p) == "Mission_Select_Button_CS"
                     and sel.active(sel.sc.read(p, head_only=True)["m_GameObject"]["m_PathID"])]
             props = [sel.sc.read(p)["sceneProp"]["m_PathID"] for p in rows]
@@ -112,7 +115,7 @@ class ScenarioTest(unittest.TestCase):
             self.assertEqual(len(ctx.scene_names), base + 4)
             sel = SceneModel(ctx, 2)
             pages2 = sel.sc.read(next(p for p in sel.mb if sel.script_class(p) == "Mission_Select_Manager_CS"))["missionLists"]
-            self.assertEqual(len(pages2), pages0 + 1, "second scenario goes on the same custom page")
+            self.assertEqual(len(pages2), len(pages), "second scenario goes on the same custom page")
 
             mgr.set_mission_text("90_My_First_Battle", title="Renamed", briefing="New text")
             self.assertEqual(mgr.mission_for_scene("90_My_First_Battle")[1]["Scene_Title"], "Renamed")
