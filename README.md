@@ -22,36 +22,13 @@ changes.
 
 ## What it does
 
-- Move, rotate, add, copy and delete tanks, waypoints and scenery.
-- Tank settings: type, side, AI behaviour, respawns, unit group, follow target
-  (allied groups); one tank or many at once.
-- Mission settings (nothing selected): fog, visibility, recon plane.
-- Objects pane: new tanks, routes, waypoints, events and trigger areas, and
-  objects from any mission. Click an item to choose the Add tool for it; each
-  click on the map then places one. A new route is drawn waypoint by waypoint;
-  right-click, double-click or Enter finishes it. Right-click > Add here places
-  at the pointer; Insert in a table adds a row.
-- Events: messages, mission complete or failed, artillery, AI changes and more.
-  An event starts on a timer, when tanks are destroyed, or when tanks enter a
-  trigger area. It can enable other events (for example the next wave) and
-  cancel others.
-- Trigger areas: boxes or circles on the map. Properties sets their size and
-  the tanks that count: listed tanks, any hostile tank or any friendly tank.
-- Table Of Contents: layer counts; double-click opens the layer's table,
-  right-click selects, zooms or shows only that layer.
-- Terrain tools (toolbar): paint the ground layers and raise, lower, flatten or
-  smooth the ground of a custom scenario. The scenario gets its own copy of the
-  terrain; the original missions keep theirs. Brush options are on the Terrain
-  tab; elevation tint and contour lines are in the Table Of Contents.
-- Scenario > Rebuild AI route map: AI tanks then drive around the scenario's
-  own terrain and objects.
-- Tables of spawns, events, waypoints and scenery: double-click a cell to edit
-  it.
-- New scenarios from an existing mission or on an empty terrain (Scenario
-  menu). They appear on a "Custom Missions" page in the game. The briefing
-  screen is updated on save.
-- F5 starts the game. The editor does not change game files while the game
-  runs.
+- Edit tanks, waypoints, routes and scenery of any mission.
+- Tank and mission settings: type, side, AI behaviour, respawns, fog.
+- Events with timers, destroyed tanks or trigger areas, for example waves.
+- New scenarios from a mission or on an empty terrain.
+- Terrain painting and height brushes for custom scenarios.
+- Rebuild the AI route map of custom scenarios.
+- Back up, export and import scenarios.
 
 ## Tools and controls
 
