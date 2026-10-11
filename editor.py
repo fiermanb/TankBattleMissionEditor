@@ -1230,7 +1230,9 @@ class EditorApp:
             "chooses the Add tool for it. In every tool the wheel zooms and Space or the middle button pans.\n\n"
             "Keys: Q / E rotate by the step (Shift: 1 deg), Del delete / restore, Ctrl+D duplicate, Ctrl+Z undo, "
             "Ctrl+S save, P select parent, F zoom to selection, Home full extent, Tab next spawn, "
-            "L events list, T terrain follow, Esc cancels the route being drawn or clears the selection."),
+            "L events list, T terrain follow, Esc cancels the route or selection box in progress, else "
+            "returns to Select / move, else clears the selection. A tool also ends with right-click > Stop or by "
+            "clicking its pressed button (or its chosen item in the Objects pane) again."),
             parent=self.root)
 
     def show_about(self):
@@ -1359,6 +1361,8 @@ class EditorApp:
                     continue
                 icon, tip, cmd = e[:3]
                 toggle = len(e) > 3 and e[3]
+                if toggle:
+                    cmd = (lambda c=cmd, t=toggle: self.press_tool(t, c))
                 btn = IconButton(b, self.image(icon), cmd, tip, toggle=toggle)
                 btn.pack(side="left", padx=0, pady=1)
                 if toggle:
@@ -2069,7 +2073,9 @@ class EditorApp:
     def on_obj_press(self, e):
         item = self.obj_tree.identify_row(e.y)
         known = item in self.obj_entries or item in self.obj_templates
-        self.obj_drag = {"item": item, "start": (e.x_root, e.y_root), "active": False} if known else None
+        chosen = known and self.tool == "add" and item in self.obj_tree.selection()
+        self.obj_drag = ({"item": item, "start": (e.x_root, e.y_root), "active": False, "chosen": chosen}
+                         if known else None)
 
     def on_obj_motion(self, e):
         d = self.obj_drag
@@ -2085,6 +2091,9 @@ class EditorApp:
     def on_obj_release(self, e):
         d, self.obj_drag = self.obj_drag, None
         self.obj_tree.config(cursor="")
+        if d and not d["active"] and d.get("chosen"):
+            self.stop_tool()
+            return
         if not d or not d["active"]:
             return
         if self.root.winfo_containing(e.x_root, e.y_root) is not self.canvas:
@@ -2618,6 +2627,21 @@ class EditorApp:
         self.tool_lbl.config(text=f"Tool: {self.tool_title()}")
         self.status(self.tool_hint())
 
+    def press_tool(self, key, choose):
+        """Toolbar tool button: choose the tool; the button of the active tool
+        returns to Select / move."""
+        if key != "select" and self.tool_key() == key and self.sketch is None:
+            self.set_tool("select")
+        else:
+            choose()
+
+    def stop_tool(self):
+        """Back to Select / move (Esc, right-click > Stop, active button again)."""
+        if self.tool != "select":
+            title = self.tool_title()
+            self.set_tool("select")
+            self.status(f"{title} stopped. {self.tool_hint()}")
+
     def tool_key(self):
         """Toolbar button of the active tool."""
         if self.tool != "add":
@@ -2637,17 +2661,23 @@ class EditorApp:
 
     def tool_hint(self):
         """Instructions of the active tool for the status bar."""
+        hint = self.tool_instructions()
+        if self.tool != "select" and self.sketch is None:
+            hint += " Esc, right-click > Stop, or the Select / move tool ends it."
+        return hint
+
+    def tool_instructions(self):
         tool = self.tool
         if self.sketch is not None:
             return self.sketch_hint()
         if tool == "add":
             kind, value, title = self.add_item
             if kind == "template" and tuple(value) == ("route",):
-                return ("New route: click its first waypoint, then the next ones. Right-click, double-click or "
-                        "Enter finishes; Backspace removes the last waypoint; Esc cancels the route.")
+                return ("New route: click its first waypoint, then the next ones; right-click, double-click or "
+                        "Enter finishes the route.")
             if kind == "template" and tuple(value) == ("waypoint",):
                 return "Waypoint: click on the map to add a waypoint after the selected one of the selected route."
-            return f"Add {title}: click on the map to place one. Choose another tool to stop."
+            return f"Add {title}: click on the map to place one."
         if tool in TERRAIN_TOOLS:
             what = "paints the ground layer chosen" if tool == "texture" else "changes the ground"
             return f"{TOOL_NAMES[tool]}: click or drag on the map; the brush {what} (settings on the Terrain tab)."
@@ -4302,6 +4332,7 @@ class EditorApp:
         if self.sketch is not None:
             self.finish_sketch()
             return
+        stop = self.tool_title() if self.tool != "select" else None
         target = self.hit(e.x, e.y, exact=bool(e.state & ALT_MASK))
         if target is not None and target not in self.sel:
             self.select(target)
@@ -4359,6 +4390,9 @@ class EditorApp:
             menu.insert_cascade(2, label=f"Route ({len(tanks)} tank{'s' if len(tanks) > 1 else ''})",
                                 menu=routes, compound="left", image=self.legend(("swatch", "route", PACK_COLOURS[0])))
             menu.insert_separator(3)
+        if stop:
+            menu.insert_separator(0)
+            menu.insert_command(0, label=f"Stop {stop}", command=self.stop_tool, accelerator="Esc")
         try:
             menu.tk_popup(e.x_root, e.y_root)
         finally:
@@ -4438,6 +4472,8 @@ class EditorApp:
             elif self.drag and self.drag.get("mode") in ("boxsel", "zoombox"):
                 self.drag = None
                 self.canvas.delete("rubber")
+            elif self.tool != "select":
+                self.stop_tool()
             else:
                 self.select(None)
         elif k == "w":

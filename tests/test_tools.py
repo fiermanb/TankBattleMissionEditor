@@ -62,13 +62,29 @@ class ToolTest(unittest.TestCase):
         app.show_page("left", "objects")
         app.show_page("left", "toc")
         self.assertEqual(self.state()[0], "raise")
-        # Esc clears the selection but keeps the tool
+        self.assertIn("Esc, right-click > Stop", app.status_lbl.cget("text"))
+        # with nothing in progress Esc returns to Select / move
         app.on_key(Key("Escape"))
-        self.assertEqual(self.state()[0], "raise")
+        self.assertEqual(self.state(), ("select", "arrow"))
         app.set_tool("pan")
         self.assertEqual(self.state(), ("pan", "hand2"))
         self.assertEqual(self.pressed(), {"pan"})
+        # the pressed button clicked again returns to Select / move
+        app.press_tool("pan", lambda: app.set_tool("pan"))
+        self.assertEqual(self.state(), ("select", "arrow"))
+        app.press_tool("pan", lambda: app.set_tool("pan"))
+        self.assertEqual(self.state()[0], "pan")
         app.set_tool("select")
+
+    def test_chosen_object_clicked_again_stops_the_add_tool(self):
+        app = self.app
+        app.use_template(("spawn", 0))
+        self.root.update()
+        iid = app.obj_tree.selection()[0]
+        app.obj_drag = {"item": iid, "start": (0, 0), "active": False,
+                        "chosen": app.tool == "add" and iid in app.obj_tree.selection()}
+        app.on_obj_release(Click(0, 0))
+        self.assertEqual(self.state(), ("select", "arrow"))
 
     def test_add_tool_places_with_each_click(self):
         app, m = self.app, self.app.model

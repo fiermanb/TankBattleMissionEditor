@@ -52,7 +52,7 @@ The editor finds the game in your Steam libraries or asks for its folder
 | Ctrl+X / C / V | cut / copy / paste (at the cursor) |
 | Del, Ctrl+D, Q / E | delete, duplicate, rotate |
 | Ctrl+Z, Ctrl+S, Ctrl+A | undo, save, select all |
-| Esc | cancel the route being drawn, else clear the selection |
+| Esc | cancel the route being drawn, else back to Select / move, else clear the selection |
 | Space (held) | pan in any tool |
 
 Help > Controls lists all shortcuts.
