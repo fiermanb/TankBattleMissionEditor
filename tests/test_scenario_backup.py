@@ -124,6 +124,35 @@ class ScenarioBackupTest(unittest.TestCase):
 
 
 @unittest.skipUnless(os.path.isdir(GAME), "game not installed")
+class CustomSourceTest(unittest.TestCase):
+    def test_restore_takes_an_original_briefing_on_the_same_terrain(self):
+        tmp = tempfile.mkdtemp(dir=os.path.dirname(GAME))
+        self.addCleanup(remove_tree, tmp)
+        game = os.path.join(tmp, "game")
+        os.makedirs(game)
+        mirror_game(game)
+        ctx = GameContext(game)
+        mgr = ScenarioManager(ctx, os.path.join(tmp, "backups"))
+        field = next(p for p, d in mgr.missions() if d["Battle_Scene_Name"] == "20_Open_Field_Intercept_Practice")
+        mgr.create(field, "Copy A", "x")
+        a = next(p for p, d in mgr.missions() if d["Scene_Title"] == "Copy A")
+        self.assertNotIn("Copy A", [lab for lab, _ in mgr.terrains()][0], "custom scenarios are no templates")
+        mgr.create(a, "Copy B", "y")
+        entry_b = next(s for s in mgr.custom if s["title"] == "Copy B")
+        self.assertEqual(entry_b["source"], "Copy_A")
+        backups = ScenarioBackups(ctx, mgr)
+        backups.backup(entry_b)
+        mgr.remove_all()
+        _, battle, _ = backups.restore(entry_b["scene_id"])
+        restored = next(s for s in mgr.custom if s["battle_index"] == battle)
+        src = next(d for _, d in mgr.missions() if d["Scene_ID"] == restored["source"])
+        self.assertTrue(mgr.is_original(src))
+        self.assertEqual(mgr.terrain_of(src["Battle_Scene_Name"]), mgr.terrain_of(restored["battle_scene"]))
+        mission = mgr.mission_for_scene(restored["battle_scene"])[1]
+        self.assertEqual(mission["Preview_Textures"], src["Preview_Textures"])
+
+
+@unittest.skipUnless(os.path.isdir(GAME), "game not installed")
 class ScenarioExchangeTest(unittest.TestCase):
     def test_export_import(self):
         tmp = tempfile.mkdtemp(dir=os.path.dirname(GAME))

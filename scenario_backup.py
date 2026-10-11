@@ -590,19 +590,33 @@ class ScenarioBackups:
         missions = sm.missions()
         if any(d["Scene_ID"] == meta["scene_id"] for _, d in missions):
             raise ValueError(f"'{meta['title']}' is already in the game")
-        custom = {c["scene_id"] for c in sm.custom}
-        originals = [(pid, d) for pid, d in missions if d["Scene_ID"] not in custom]
+        originals = [(pid, d) for pid, d in missions if sm.is_original(d)]
         src = next((pid for pid, d in originals if d["Scene_ID"] == meta.get("source")), None)
         report = []
-        if src is None:
+        fallback = src is None
+        if fallback:
             src = originals[0][0]
-            report.append(f"Its source mission '{meta.get('source')}' is no longer in the game; the briefing "
-                          "screen was built from another mission.")
         menu_idx, battle_idx = sm.create(src, meta["title"], meta["briefing"])
         report += self.convert(folder, self.ctx.scene_path(battle_idx), force=force)
         entry = next(c for c in sm.custom if c["battle_index"] == battle_idx)
         if meta.get("terrain"):
             report += self._restore_terrain(folder, meta["terrain"], battle_idx, entry)
+        if fallback:
+            # the source mission is not an original one: take the briefing scene of
+            # an original mission on the same terrain
+            terrain = None
+            if meta.get("terrain"):
+                t = meta["terrain"]
+                if t.get("source_file") and t.get("source_pid") is not None:
+                    terrain = self.index.resolve(t["source_file"], t["source_pid"], tuple(t["source"]))
+            else:
+                terrain = sm.terrain_of(entry["battle_scene"])
+            better = sm.original_on_terrain(terrain) if terrain else None
+            if better is not None and better != src:
+                sm.rebase_menu(entry, better)
+            else:
+                report.append(f"Its source mission '{meta.get('source')}' is not an original mission of this "
+                              "game; the briefing screen was built from another mission.")
         if meta.get("navmesh"):
             report += self._restore_navmesh(meta["navmesh"], battle_idx, entry)
         current = sm.mission_for_scene(entry["battle_scene"])[1]

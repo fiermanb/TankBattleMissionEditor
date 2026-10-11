@@ -145,6 +145,73 @@ class ScenarioManager:
                 return i
         return None
 
+    def is_original(self, d):
+        """True for a mission of the game itself (fields of its mission asset):
+        not a custom scenario (whose battle scene is named 90_...)."""
+        custom = {c["scene_id"] for c in self.manifest["scenarios"]}
+        return not d["Battle_Scene_Name"].startswith(CUSTOM_PREFIX) and d["Scene_ID"] not in custom
+
+    def terrain_of(self, battle_scene):
+        """(file, path id) of the TerrainData a battle scene uses, or None."""
+        idx = self.scene_index(battle_scene)
+        if idx is None:
+            return None
+        sc = SceneFile(self.ctx, self.ctx.scene_path(idx))
+        tpid = next((p for p in sc.all_pids() if sc.type_name(p) == "Terrain"), None)
+        if tpid is None:
+            return None
+        ref = sc.read(tpid)["m_TerrainData"]
+        return (sc.externals[ref["m_FileID"] - 1], ref["m_PathID"]) if ref["m_FileID"] else None
+
+    def original_on_terrain(self, terrain):
+        """Pid of an original mission (not a tutorial) whose battle scene uses
+        TerrainData `terrain` ((file, path id)), or else a terrain of the same
+        name (a scenario's terrain copy keeps the name), or None."""
+        def terrain_name(t):
+            try:
+                return self.ctx.external(t[0]).objects[t[1]].peek_name()
+            except Exception:
+                return None
+        want = tuple(terrain)
+        by_name = None
+        for pid, d in self.missions():
+            name = (d["Scene_Title"] + " " + d["Battle_Scene_Name"]).lower()
+            if not self.is_original(d) or "tutorial" in name or "turotial" in name:
+                continue
+            t = self.terrain_of(d["Battle_Scene_Name"])
+            if t == want:
+                return pid
+            if by_name is None and t and terrain_name(t) == terrain_name(want):
+                by_name = pid
+        return by_name
+
+    def rebase_menu(self, entry, source_pid):
+        """Give a custom scenario the briefing scene (preview map, unit rows) and
+        preview images of another mission. The briefing rows are rebuilt with
+        sync_mission afterwards."""
+        ctx = self.ctx
+        mf = self._mission_file()
+        src = mf.read(source_pid)
+        menu_src = self.scene_index(src["Menu_Scene_Name"])
+        if menu_src is None:
+            raise ValueError("the mission's briefing scene is not in the build list")
+        self._ensure_shared_backup()
+        menu = SceneFile(ctx, os.path.join(ctx.data_dir, f"level{menu_src}"))
+        fid = menu.externals.index(MISSION_ASSETS) + 1
+        for pid in menu.all_pids():
+            if menu.type_name(pid) == "MonoBehaviour" and menu.script_class(pid) == MENU_MANAGER_SCRIPT:
+                d = dict(menu.read(pid))
+                d["sceneProp"] = {"m_FileID": fid, "m_PathID": entry["mission_asset"]}
+                menu.write(pid, d)
+        menu.save(os.path.join(ctx.data_dir, f"level{entry['menu_index']}"))
+        shutil.copy2(os.path.join(ctx.data_dir, f"sharedassets{menu_src}.assets"),
+                     os.path.join(ctx.data_dir, f"sharedassets{entry['menu_index']}.assets"))
+        self.set_mission_fields(entry["battle_scene"], Preview_Textures=list(src["Preview_Textures"]))
+        for s in self.manifest["scenarios"]:
+            if s["scene_id"] == entry["scene_id"]:
+                s["source"] = src["Scene_ID"]
+        self._save_manifest()
+
     def terrains(self):
         """The distinct terrains of the original missions, for starting a scenario
         on an empty map: [(label, template mission pid)]. The template is the
@@ -170,7 +237,7 @@ class ScenarioManager:
             g = groups.setdefault(key, {"missions": 0, "best": None})
             g["missions"] += 1
             name = (d["Scene_Title"] + " " + d["Battle_Scene_Name"]).lower()
-            if d["Scene_ID"] in custom or "tutorial" in name or "turotial" in name:
+            if d["Scene_ID"] in custom or not self.is_original(d) or "tutorial" in name or "turotial" in name:
                 continue
             scripts = sum(1 for p in sc.all_pids() if sc.type_name(p) == "MonoBehaviour")
             if g["best"] is None or scripts < g["best"][0]:
