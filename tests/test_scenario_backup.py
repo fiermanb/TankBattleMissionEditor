@@ -123,5 +123,51 @@ class ScenarioBackupTest(unittest.TestCase):
         self.assertGreater(checked, 100)
 
 
+@unittest.skipUnless(os.path.isdir(GAME), "game not installed")
+class ScenarioExchangeTest(unittest.TestCase):
+    def test_export_import(self):
+        tmp = tempfile.mkdtemp(dir=os.path.dirname(GAME))
+        self.addCleanup(remove_tree, tmp)
+        game = os.path.join(tmp, "game")
+        os.makedirs(game)
+        mirror_game(game)
+        ctx = GameContext(game)
+        mgr = ScenarioManager(ctx, os.path.join(tmp, "backups"))
+        src = next(p for p, d in mgr.missions() if d["Battle_Scene_Name"] == "10_Urban_Area_Close_Combat_Basic")
+        _, battle_idx = mgr.create(src, "Shared Map", "For a friend.")
+        m = SceneModel(ctx, battle_idx, terrain=None)
+        hostile = next(e for e in m.spawns if m.sc.read(e)["Relationship"] == 1)
+        m.begin("move")
+        m.move_to(m.tr_of_go[m.event_go[hostile]], 12.0, 34.0, follow_terrain=False)
+        m.commit()
+        m.save()
+        with open(ctx.scene_path(battle_idx), "rb") as f:
+            original = f.read()
+
+        backups = ScenarioBackups(ctx, mgr)
+        path = os.path.join(tmp, "Shared_Map.tbscenario")
+        backups.export(mgr.custom[0], path, "test")
+
+        title, _, second_idx, _ = backups.import_file(path)
+        self.assertEqual(title, "Shared Map (2)", "a name in use gets a number")
+        with open(ctx.scene_path(second_idx), "rb") as f:
+            self.assertEqual(f.read(), original)
+
+        mgr.remove_all()
+        for b in backups.list():
+            backups.delete(b["folder"])
+        title, _, third_idx, _ = backups.import_file(path)
+        self.assertEqual(title, "Shared Map")
+        with open(ctx.scene_path(third_idx), "rb") as f:
+            self.assertEqual(f.read(), original)
+        self.assertEqual(mgr.mission_for_scene(ctx.scene_label(third_idx))[1]["Scene_Briefing"], "For a friend.")
+
+        bad = os.path.join(tmp, "bad.tbscenario")
+        with open(bad, "wb") as f:
+            f.write(b"PK\x05\x06" + b"\0" * 18)
+        with self.assertRaises(ValueError):
+            backups.import_file(bad)
+
+
 if __name__ == "__main__":
     unittest.main()

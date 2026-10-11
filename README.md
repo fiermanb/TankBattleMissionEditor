@@ -60,6 +60,11 @@ Custom scenarios are backed up on every save. A game update removes them from
 the game; the editor then offers to restore them, converted to the new game
 version (also: Scenario > Restore scenarios from backup).
 
+Scenario > Export scenario saves a scenario as one `.tbscenario` file to share;
+Scenario > Import scenario installs one. The file holds no game files, only the
+map and the names of the game assets it uses: the recipient needs the game and
+this editor, in any game version.
+
 ## Limitations
 
 - AI navigation data is not updated: AI tanks do not route around added or

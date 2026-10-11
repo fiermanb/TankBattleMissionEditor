@@ -16,6 +16,10 @@ Each backup (backups/<installation>/scenarios/<scene id>/) holds
   - mission.json: the mission's settings and title/briefing,
   - meta.json: source mission, game version and dates.
 
+A backup can be exported as one .tbscenario file (a zip of these files) and
+imported in another installation: it contains no game assets, only the map and
+the names of the assets it uses, which every copy of the game has.
+
 Restoring creates the scenario again from its source mission in the installed
 game version (fresh briefing scene, mission asset and mission select entry),
 then converts the backed-up battle scene: references are looked up again by
@@ -29,10 +33,15 @@ import gzip
 import json
 import os
 import shutil
+import zipfile
 
 from scene_io import SceneFile, layout_tree, script_key
 
 BACKUP_DIR_NAME = "scenarios"
+EXCHANGE_SUFFIX = ".tbscenario"
+EXCHANGE_FORMAT = 1
+BACKUP_FILES = ("meta.json", "mission.json", "refs.json.gz", "scripts.json.gz", "battle.level")
+MAX_IMPORT_BYTES = 256 * 1024 * 1024
 SKIP_MISSION_FIELDS = {"m_GameObject", "m_Enabled", "m_Script", "m_Name", "Scene_ID", "Menu_Scene_Name",
                        "Battle_Scene_Name", "Scene_Title", "Scene_JPN_Title", "Scene_Briefing",
                        "Scene_JPN_Briefing", "Allies_Count"}
@@ -256,6 +265,72 @@ class ScenarioBackups:
 
     def delete(self, scene_id):
         shutil.rmtree(self.folder(scene_id), ignore_errors=True)
+
+    # ---- exchange: one file per scenario ---------------------------------
+
+    def export(self, entry, path, editor_version=""):
+        """Write a custom scenario (manifest entry) as one .tbscenario file, from
+        a fresh backup of its current state."""
+        folder = self.backup(entry)
+        tmp = path + ".tmp"
+        with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as z:
+            z.writestr("format.json", json.dumps({"format": EXCHANGE_FORMAT, "editor_version": editor_version}))
+            for name in BACKUP_FILES:
+                z.write(os.path.join(folder, name), name)
+        os.replace(tmp, path)
+        return path
+
+    def read_exchange(self, path):
+        """(meta, {file name: bytes}) of a .tbscenario file, checked: only the
+        known member names are read, with a size limit."""
+        try:
+            z = zipfile.ZipFile(path)
+        except (OSError, zipfile.BadZipFile) as e:
+            raise ValueError(f"not a scenario file ({e})") from None
+        with z:
+            names = set(z.namelist())
+            missing = [n for n in ("format.json",) + BACKUP_FILES if n not in names]
+            if missing:
+                raise ValueError("not a scenario file (missing " + ", ".join(missing) + ")")
+            if sum(z.getinfo(n).file_size for n in ("format.json",) + BACKUP_FILES) > MAX_IMPORT_BYTES:
+                raise ValueError("the scenario file is too large")
+            fmt = json.loads(z.read("format.json"))
+            if fmt.get("format") != EXCHANGE_FORMAT:
+                raise ValueError("this scenario file was made with a newer editor version; update the editor")
+            files = {n: z.read(n) for n in BACKUP_FILES}
+        meta = json.loads(files["meta.json"])
+        for key in ("title", "scene_id", "game_metadata_sha256"):
+            if not isinstance(meta.get(key), str):
+                raise ValueError("the scenario file is damaged (meta.json)")
+        return meta, files
+
+    def import_file(self, path):
+        """Install a .tbscenario file in the game. A scenario whose name is
+        already used (in the game or among the backups) is installed under a
+        numbered title. Returns (title, menu index, battle index, report)."""
+        from scenarios import slugify
+        meta, files = self.read_exchange(path)
+        taken_ids = {d["Scene_ID"].lower() for _, d in self.scenarios.missions()}
+        taken_ids |= {b["folder"].lower() for b in self.list()}
+        title, n = meta["title"], 1
+        while slugify(title).lower() in taken_ids:
+            n += 1
+            title = f"{meta['title']} ({n})"
+        meta.update({"title": title, "scene_id": slugify(title),
+                     "imported": datetime.datetime.now().isoformat(timespec="seconds")})
+        folder = self.folder(meta["scene_id"])
+        os.makedirs(folder)
+        try:
+            for name, data in files.items():
+                if name == "meta.json":
+                    data = json.dumps(meta, indent=2).encode("utf-8")
+                with open(os.path.join(folder, name), "wb") as f:
+                    f.write(data)
+            menu_idx, battle_idx, report = self.restore(meta["scene_id"])
+        except Exception:
+            shutil.rmtree(folder, ignore_errors=True)
+            raise
+        return title, menu_idx, battle_idx, report
 
     # ---- restoring ---------------------------------------------------------
 

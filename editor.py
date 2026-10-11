@@ -31,7 +31,7 @@ import icons
 import settings
 from version import APP_NAME, COPYRIGHT, __version__
 from briefing_sync import sync_mission
-from scenario_backup import ScenarioBackups
+from scenario_backup import EXCHANGE_SUFFIX, ScenarioBackups
 from object_import import ObjectLibrary, base_name, category, import_object, reconnect_event_refs
 from scenarios import ScenarioManager
 from scene_io import GameContext
@@ -825,6 +825,69 @@ class EditorApp:
             messagebox.showinfo("Restore scenarios", msg + "\n\n" + "\n".join(lines), parent=self.root)
         self.status(msg, "ok" if done and not lines else "warn", banner=True)
 
+    def export_scenario(self):
+        """Save a custom scenario as one .tbscenario file to share it."""
+        if not self.ctx:
+            return
+        custom = self.scenarios.custom
+        if not custom:
+            self.status("There are no custom scenarios to export.", banner=True)
+            return
+        entry = next((s for s in custom if self.model and s["battle_index"] == self.model.index), None)
+        if entry is None:
+            entry = ListDialog(self.root, "Export scenario", [(s["title"], s) for s in custom],
+                               prompt="Choose the scenario to export.").run()
+            if not entry:
+                return
+        if self.model and self.model.index == entry["battle_index"] and not self.guard_unsaved():
+            return
+        path = filedialog.asksaveasfilename(
+            parent=self.root, title="Export scenario", initialfile=entry["scene_id"] + EXCHANGE_SUFFIX,
+            defaultextension=EXCHANGE_SUFFIX, filetypes=[("Tank Battle scenario", "*" + EXCHANGE_SUFFIX)])
+        if not path:
+            return
+        self.busy(f"Exporting '{entry['title']}'...")
+        try:
+            self.backups.export(entry, path, __version__)
+        except Exception as e:
+            self.idle()
+            self.status(f"Exporting failed: {e}", "warn", banner=True)
+            return
+        self.idle()
+        self.status(f"Exported '{entry['title']}' to {path} ({os.path.getsize(path) // 1024} KB). It holds no game "
+                    "files; the recipient needs the game and this editor (Scenario > Import scenario).",
+                    "ok", banner=True)
+
+    def import_scenario(self):
+        """Install a .tbscenario file made with this editor (in any game version)."""
+        if not self.ctx:
+            return
+        path = filedialog.askopenfilename(
+            parent=self.root, title="Import scenario",
+            filetypes=[("Tank Battle scenario", "*" + EXCHANGE_SUFFIX), ("All files", "*.*")])
+        if not path or not self.guard_unsaved():
+            return
+        self.busy("Importing the scenario...")
+        try:
+            title, _, battle_idx, report = self.backups.import_file(path)
+        except PermissionError:
+            self.idle()
+            self.status("Importing failed: a game file is locked. Close the game and try again.", "warn",
+                        banner=True)
+            return
+        except Exception as e:
+            self.idle()
+            self.status(f"Importing failed: {e}", "warn", banner=True)
+            return
+        self.idle()
+        self.refresh_scenes()
+        notes = [r for r in report if not r.startswith("Briefing updated")]
+        if notes:
+            messagebox.showinfo("Import scenario", f"Imported '{title}'.\n\n" + "\n".join(notes), parent=self.root)
+        self.open_scene(battle_idx)
+        self.status(f"Imported '{title}' (level{battle_idx}). It is on the 'Custom Missions' page of the mission "
+                    "select screen.", "ok", banner=True)
+
     def report_game_update(self, update):
         """Tell the user what a game update (or file verification) changed."""
         lines = ["The game files were replaced since the editor last changed them (game update, or "
@@ -988,6 +1051,8 @@ class EditorApp:
                           ("Mission text...", self.edit_mission_text),
                           ("Update briefing screen", self.update_briefing), None,
                           ("Restore scenarios from backup...", lambda: self.restore_backups()),
+                          ("Export scenario...", self.export_scenario),
+                          ("Import scenario...", self.import_scenario), None,
                           ("Remove custom scenarios...", self.remove_custom)])
         menu("Windows", [("Table Of Contents", lambda: self.show_page("left", "toc"), "", "toc"),
                          ("Objects", lambda: self.show_page("left", "objects"), "", "objects"),
