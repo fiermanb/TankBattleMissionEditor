@@ -144,6 +144,28 @@ def detect_game():
     return found
 
 
+def steam_app_id(game_root):
+    """Steam app id of an installed game folder (from the appmanifest of its
+    Steam library), or None when the folder is not in a Steam library."""
+    common = os.path.dirname(os.path.abspath(game_root))
+    apps = os.path.dirname(common)
+    if os.path.basename(common).lower() != "common" or not os.path.isdir(apps):
+        return None
+    folder = os.path.basename(os.path.abspath(game_root)).lower()
+    for f in os.listdir(apps):
+        if f.startswith("appmanifest_") and f.endswith(".acf"):
+            try:
+                with open(os.path.join(apps, f), "r", encoding="utf-8", errors="replace") as fh:
+                    text = fh.read()
+            except OSError:
+                continue
+            m = re.search(r'"installdir"\s+"([^"]+)"', text)
+            a = re.search(r'"appid"\s+"(\d+)"', text)
+            if m and a and m.group(1).lower() == folder:
+                return a.group(1)
+    return None
+
+
 def backup_dir_for(game_root):
     norm = os.path.normcase(os.path.abspath(game_root))
     tag = hashlib.sha1(norm.encode("utf-8")).hexdigest()[:8]

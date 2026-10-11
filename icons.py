@@ -203,6 +203,29 @@ def draw(name):
     elif name == "gamefolder":
         d.polygon([(4, 16), (24, 16), (30, 22), (58, 22), (58, 54), (4, 54)], fill=YELLOW, outline=BLACK)
         d.polygon([(30, 30), (44, 46), (16, 46)], fill=(240, 70, 60, 255), outline=BLACK)
+    elif name == "play":
+        d.ellipse((4, 4, 60, 60), fill=GREEN, outline=BLACK, width=3)
+        d.polygon([(24, 16), (48, 32), (24, 48)], fill=WHITE)
+    elif name == "tbrush":
+        d.line((52, 6, 26, 36), fill=(150, 100, 50, 255), width=8)
+        d.polygon([(22, 32), (32, 42), (22, 56), (6, 58), (10, 44)], fill=(60, 140, 60, 255), outline=BLACK)
+    elif name in ("traise", "tlower", "tflatten", "tsmooth"):
+        ground = [(2, 62), (2, 50), (16, 44), (32, 40), (48, 44), (62, 50), (62, 62)]
+        if name == "tflatten":
+            ground = [(2, 62), (2, 46), (62, 46), (62, 62)]
+        elif name == "tsmooth":
+            ground = [(2, 62), (2, 46), (14, 40), (26, 46), (38, 40), (50, 46), (62, 40), (62, 62)]
+        d.polygon(ground, fill=(150, 120, 80, 255), outline=BLACK)
+        if name == "traise":
+            d.polygon([(32, 4), (48, 22), (38, 22), (38, 34), (26, 34), (26, 22), (16, 22)], fill=GREEN,
+                      outline=BLACK)
+        elif name == "tlower":
+            d.polygon([(32, 36), (48, 18), (38, 18), (38, 4), (26, 4), (26, 18), (16, 18)], fill=RED, outline=BLACK)
+        elif name == "tflatten":
+            d.rectangle((8, 26, 56, 34), fill=BLUE, outline=BLACK)
+        else:
+            pts = [(x, 22 - 9 * math.sin((x - 6) / 52 * 2 * math.pi)) for x in range(6, 59, 2)]
+            d.line(pts, fill=BLUE, width=5)
     return img
 
 
@@ -232,6 +255,15 @@ def swatch(kind, colour, size):
         d.polygon([(4, 60), (24, 26), (36, 44), (44, 34), (60, 60)], fill=(140, 120, 80, 255))
     elif kind == "outline":
         d.rectangle((6, 6, 58, 58), outline=c, width=6)
+    elif kind == "elevation":
+        for y in range(6, 59):
+            f = (58 - y) / 52
+            d.line((6, y, 58, y), fill=(int(60 + 190 * f), int(110 + 120 * f), int(150 - 40 * f + 100 * f * f), 255))
+        d.rectangle((6, 6, 58, 58), outline=BLACK, width=2)
+    elif kind == "contour":
+        d.rectangle((6, 6, 58, 58), fill=(150, 160, 110, 255), outline=BLACK, width=2)
+        for r in (8, 16, 24):
+            d.ellipse((32 - r, 32 - r * 0.7, 32 + r, 32 + r * 0.7), outline=(60, 50, 30, 255), width=3)
     elif kind == "route":
         pts = [(8, 54), (26, 24), (42, 42), (58, 10)]
         d.line(pts, fill=BLACK, width=7)

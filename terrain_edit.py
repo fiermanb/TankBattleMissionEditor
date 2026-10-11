@@ -48,6 +48,17 @@ def mip_chain(rgba):
 HEIGHT_MAX = 32766
 PATCH = 16
 SCULPT_METRES = 0.5
+FALLOFFS = ("smooth", "linear", "hard")
+
+
+def falloff(d, kind):
+    """Brush weight for distances d (1 = brush edge)."""
+    f = np.clip(1.0 - d, 0.0, 1.0)
+    if kind == "linear":
+        return f
+    if kind == "hard":
+        return np.clip((1.0 - d) * 8.0, 0.0, 1.0)
+    return f * f * (3 - 2 * f)
 
 
 def lod_tables(heights, levels):
@@ -231,7 +242,7 @@ class TerrainPaint:
         res = self.alphas[0].shape[0]
         return ((wz - self.origin[2]) / self.size[1] * res, (wx - self.origin[0]) / self.size[0] * res)
 
-    def paint(self, wx, wz, radius, layer, strength):
+    def paint(self, wx, wz, radius, layer, strength, shape="smooth"):
         """Paint `layer` around world point (wx, wz) with a soft round brush of
         `radius` metres; strength 0..1 per dab. Returns (undo patch, rows, cols)
         or None when outside the terrain."""
@@ -244,9 +255,7 @@ class TerrainPaint:
             return None
         patch = [a[r0:r1, c0:c1].copy() for a in self.alphas]
         yy, xx = np.mgrid[r0:r1, c0:c1]
-        d = np.hypot(yy + 0.5 - cy, xx + 0.5 - cx) / rpx
-        fall = np.clip(1.0 - d, 0.0, 1.0)
-        fall = fall * fall * (3 - 2 * fall)
+        fall = falloff(np.hypot(yy + 0.5 - cy, xx + 0.5 - cx) / rpx, shape)
         w = np.concatenate([p.astype(float) for p in patch], axis=2)
         n = w.shape[2]
         target = np.clip(w[:, :, layer] + 255.0 * strength * fall, 0, 255)
@@ -269,15 +278,20 @@ class TerrainPaint:
         res = self.heights.shape[0]
         return ((wz - self.origin[2]) / self.size[1] * (res - 1), (wx - self.origin[0]) / self.size[0] * (res - 1))
 
+    def metres_to_value(self, metres):
+        """Heightmap value of a world height in metres."""
+        return (metres - self.model.terrain.origin[1]) / self.height_scale * HEIGHT_MAX
+
     def height_at(self, wx, wz):
         r, c = self.sample(wx, wz)
         res = self.heights.shape[0]
         r, c = int(round(min(max(r, 0), res - 1))), int(round(min(max(c, 0), res - 1)))
         return int(self.heights[r, c])
 
-    def sculpt(self, wx, wz, radius, mode, strength, target=None):
+    def sculpt(self, wx, wz, radius, mode, strength, target=None, step=SCULPT_METRES, shape="smooth"):
         """Height brush around world point (wx, wz): mode raise, lower, flatten
-        (towards `target`, a height value) or smooth; strength 0..1 per dab.
+        (towards `target`, a height value) or smooth; strength 0..1 per dab;
+        step: metres raised or lowered per dab at full strength.
         Returns (undo patch, rows, cols) in heightmap samples, or None."""
         res = self.heights.shape[0]
         cy, cx = self.sample(wx, wz)
@@ -288,13 +302,11 @@ class TerrainPaint:
             return None
         before = self.heights[r0:r1, c0:c1].copy()
         yy, xx = np.mgrid[r0:r1, c0:c1]
-        d = np.hypot(yy - cy, xx - cx) / rpx
-        fall = np.clip(1.0 - d, 0.0, 1.0)
-        fall = fall * fall * (3 - 2 * fall)
+        fall = falloff(np.hypot(yy - cy, xx - cx) / rpx, shape)
         h = before.astype(float)
         if mode in ("raise", "lower"):
-            step = HEIGHT_MAX * SCULPT_METRES / self.height_scale
-            h += (1 if mode == "raise" else -1) * step * strength * fall
+            units = HEIGHT_MAX * step / self.height_scale
+            h += (1 if mode == "raise" else -1) * units * strength * fall
         elif mode == "flatten":
             h += (float(target) - h) * strength * fall
         elif mode == "smooth":
@@ -340,4 +352,4 @@ class TerrainPaint:
 
 
 __all__ = ["TerrainPaint", "copy_terrain", "read_alpha", "write_alpha", "mip_chain", "own_assets_name",
-           "terrain_components", "lod_tables", "read_heights", "with_heights"]
+           "terrain_components", "lod_tables", "read_heights", "with_heights", "FALLOFFS"]
