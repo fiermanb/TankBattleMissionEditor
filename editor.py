@@ -113,9 +113,12 @@ DOUBLE_CLICK_MS = 400
 EVENT_MARK = 18
 
 TOOLS = ("select", "pan", "zoomin", "zoomout", "rotate")
-TOOL_CURSORS = {"select": "arrow", "pan": "fleur", "zoomin": "crosshair", "zoomout": "crosshair",
-                "rotate": "exchange", "texture": "tcross", "raise": "tcross", "lower": "tcross",
-                "flatten": "tcross", "smooth": "tcross"}
+TOOL_CURSORS = {"select": "arrow", "pan": "hand2", "zoomin": "crosshair", "zoomout": "crosshair",
+                "rotate": "exchange", "texture": "spraycan", "raise": "sb_up_arrow", "lower": "sb_down_arrow",
+                "flatten": "sb_h_double_arrow", "smooth": "circle", "place": "plus"}
+BRUSH_COLOURS = {"texture": "#2E9E3E", "raise": "#D2691E", "lower": "#2F6FD0", "flatten": "#B8A000",
+                 "smooth": "#9050C0"}
+MODE_BAR_BG = "#FFF6D5"
 TOOL_NAMES = {"select": "Select / move", "pan": "Pan", "zoomin": "Zoom in", "zoomout": "Zoom out",
               "rotate": "Rotate", "texture": "Terrain texture", "raise": "Raise terrain", "lower": "Lower terrain",
               "flatten": "Flatten terrain", "smooth": "Smooth terrain"}
@@ -1216,7 +1219,8 @@ class EditorApp:
             "The Scenery table follows the scenery layers.\n\n"
             "Keys: Q / E rotate by the step (Shift: 1 deg), Del delete / restore, Ctrl+D duplicate, Ctrl+Z undo, "
             "Ctrl+S save, P select parent, F zoom to selection, Home full extent, Tab next spawn, "
-            "L events list, T terrain follow, Esc clear selection."), parent=self.root)
+            "L events list, T terrain follow, Esc back to Select / move (a second Esc clears the selection). "
+            "A bar over the map shows any other active tool; Esc or a right-click ends it."), parent=self.root)
 
     def show_about(self):
         game = self.ctx.root if self.ctx else "(none)"
@@ -1268,6 +1272,8 @@ class EditorApp:
         self.canvas = tk.Canvas(self.mapframe, background=WORKSPACE, highlightthickness=0, bd=0, takefocus=1)
         self.canvas.pack(fill="both", expand=True)
         self._base_item = self.canvas.create_image(0, 0, anchor="nw")
+        self.mode_bar = tk.Label(self.mapframe, anchor="w", padx=8, pady=3, bg=MODE_BAR_BG, font=UI_BOLD,
+                                 highlightthickness=1, highlightbackground=BORDER)
         self.docks["bottom"] = DockArea(self.vpane, lambda: self.hide_dock("bottom"))
         self.build_table(self.docks["bottom"].add_page("spawns", "Table - Spawns", self.image("table")), "spawns")
         self.build_table(self.docks["bottom"].add_page("events", "Table - Events", self.image("events")), "events")
@@ -1276,6 +1282,7 @@ class EditorApp:
         self.build_table(self.docks["bottom"].add_page("scenery", "Table - Scenery", self.image("objects")),
                          "scenery")
         self.docks["bottom"].on_select = lambda key: self.refresh_tables()
+        self.docks["left"].on_select = self.on_left_page
 
         self.docks["right"] = DockArea(self.hpane, lambda: self.hide_dock("right"))
         self.build_properties(self.docks["right"].add_page("props", "Properties", self.image("props")))
@@ -1291,6 +1298,11 @@ class EditorApp:
         self.bind_canvas()
         self.set_tool("select")
         root.bind_all("<ButtonPress>", self.on_any_click, add="+")
+
+    def on_left_page(self, key):
+        if key != "terrain" and self.tool in TERRAIN_TOOLS:
+            self.set_tool("select")
+            self.status("Terrain tool ended (Terrain tab left).")
 
     def on_any_click(self, e):
         """Highlight the caption of the dock the user is working in."""
@@ -1646,10 +1658,13 @@ class EditorApp:
         holder.pack(side="top", fill="both", expand=True, padx=2, pady=2)
         self.terr_layers = ttk.Treeview(holder, show="tree", selectmode="browse", height=8)
         self.terr_layers.pack(fill="both", expand=True)
+        self.terr_layers.bind("<<TreeviewSelect>>", lambda e: self.update_mode_bar(), add="+")
         form = tk.Frame(body)
         form.pack(side="top", fill="x", padx=4, pady=4)
         self.brush_size = tk.DoubleVar(value=10.0)
         self.brush_strength = tk.DoubleVar(value=50.0)
+        for var in (self.brush_size, self.brush_strength):
+            var.trace_add("write", lambda *_: self.update_mode_bar())
         self.brush_step = tk.DoubleVar(value=0.5)
         rows = (("Size", self.brush_size, 1, 100, " m", "{:.0f}", "Brush radius"),
                 ("Strength", self.brush_strength, 1, 100, " %", "{:.0f}", "How much one brush dab changes"),
@@ -1678,6 +1693,7 @@ class EditorApp:
         fl = tk.Frame(form)
         fl.grid(row=r + 1, column=1, columnspan=2, sticky="w", padx=4, pady=(4, 0))
         self.flatten_height = tk.StringVar(value="")
+        self.flatten_height.trace_add("write", lambda *_: self.update_mode_bar())
         ent = ttk.Entry(fl, textvariable=self.flatten_height, width=8)
         ent.pack(side="left")
         ToolTip(ent, "Height in metres; empty: the height where the stroke starts")
@@ -2012,6 +2028,8 @@ class EditorApp:
 
     def place_item(self, iid, x, z):
         """Place Objects pane item iid (template or library object) at (x, z)."""
+        if self.tool != "select":
+            self.set_tool("select")
         if iid in self.obj_templates:
             self.create_at(self.obj_templates[iid], x, z)
         elif iid in self.obj_entries:
@@ -2032,6 +2050,8 @@ class EditorApp:
         item = self.obj_tree.identify_row(e.y)
         known = item in self.obj_entries or item in self.obj_templates
         self.obj_drag = {"item": item, "start": (e.x_root, e.y_root), "active": False} if known else None
+        if known and self.tool in TERRAIN_TOOLS:
+            self.set_tool("select")
 
     def on_obj_motion(self, e):
         d = self.obj_drag
@@ -2460,6 +2480,8 @@ class EditorApp:
     def on_table_select(self, tv):
         if self._table_sync or not self.model:
             return
+        if self.tool in TERRAIN_TOOLS:
+            self.set_tool("select")
         gos = [int(i) for i in tv.selection()]
         others = [g for g in self.sel if not tv.exists(str(g))]
         if set(gos) != set(self.sel) - set(others) or others:
@@ -2557,6 +2579,9 @@ class EditorApp:
     # ---- helpers -----------------------------------------------------
 
     def set_tool(self, tool):
+        """Make `tool` the one active tool; placing or route drawing ends."""
+        if getattr(self, "place", None) is not None:
+            self.end_place()
         self.tool = tool
         if tool not in TERRAIN_TOOLS:
             self.canvas.delete("brush")
@@ -2564,6 +2589,46 @@ class EditorApp:
             btn.set_active(name == tool)
         self.canvas.config(cursor=TOOL_CURSORS[tool])
         self.tool_lbl.config(text=f"Tool: {TOOL_NAMES[tool]}")
+        self.update_mode_bar()
+
+    def to_select(self):
+        """Back to Select / move (from any tool, placing or route drawing)."""
+        if self.tool != "select" or getattr(self, "place", None) is not None:
+            self.set_tool("select")
+
+    def mode_text(self):
+        """Text of the mode bar over the map, or None in Select / move."""
+        if getattr(self, "place", None) is not None:
+            return f"Placing: {self.place['label']} - Enter, Esc or right-click ends"
+        tool = self.tool
+        if tool in TERRAIN_TOOLS:
+            what = TOOL_NAMES[tool]
+            if tool == "texture" and self.model and self.model.terrain is not None:
+                names = self.model.terrain.layer_names
+                layer = self.paint_layer()
+                if layer < len(names):
+                    what += f" ({names[layer].replace('Terrain_Layer', '').strip(' ()')})"
+            extra = ""
+            if tool == "flatten" and self.flatten_height.get().strip():
+                extra = f", to {self.flatten_height.get().strip()} m"
+            return (f"Terrain: {what} - brush {self.brush_size.get():.0f} m, strength "
+                    f"{self.brush_strength.get():.0f} %{extra} - Esc or right-click ends")
+        if tool != "select":
+            return f"{TOOL_NAMES[tool]} - Esc returns to Select / move"
+        return None
+
+    def update_mode_bar(self):
+        bar = getattr(self, "mode_bar", None)
+        if bar is None:
+            return
+        text = self.mode_text()
+        if text is None:
+            bar.place_forget()
+            return
+        colour = BRUSH_COLOURS.get(self.tool) if getattr(self, "place", None) is None else None
+        bar.config(text=text, highlightbackground=colour or BORDER, highlightthickness=2 if colour else 1)
+        bar.place(x=0, y=0, relwidth=1.0)
+        bar.lift()
 
     def toggle_follow(self):
         self.follow_var.set(not self.follow_var.get())
@@ -2579,7 +2644,8 @@ class EditorApp:
         c = self.canvas
         c.delete("banner")
         w = max(200, c.winfo_width())
-        t = c.create_text(w // 2, 26, text=text, font=UI_FONT, anchor="n", tags="banner",
+        top = 26 + (30 if getattr(self, "mode_bar", None) is not None and self.mode_bar.place_info() else 0)
+        t = c.create_text(w // 2, top, text=text, font=UI_FONT, anchor="n", tags="banner",
                           fill={"warn": WARN_FG}.get(kind, "#000000"), width=w - 80)
         x0, y0, x1, y1 = c.bbox(t)
         r = c.create_rectangle(x0 - 12, y0 - 7, x1 + 12, y1 + 7, fill=INFO_BG, outline="#000000", tags="banner")
@@ -3379,8 +3445,13 @@ class EditorApp:
         click with repeat). Finish, Enter, Esc or a right-click ends it; a
         double-click places once more and ends it. anchor() returns the world
         point a guide line is drawn from (the last waypoint of a route)."""
-        self.place = {"fn": fn, "repeat": repeat, "anchor": anchor, "last": None}
-        self.canvas.config(cursor="crosshair")
+        if self.tool != "select" or self.place is not None:
+            self.set_tool("select")
+        self.place = {"fn": fn, "repeat": repeat, "anchor": anchor, "last": None, "label": label or text}
+        for btn in self.tool_buttons.values():
+            btn.set_active(False)
+        self.canvas.config(cursor=TOOL_CURSORS["place"])
+        self.update_mode_bar()
         self.place_lbl.config(text=label or text)
         if not self.place_bar.winfo_ismapped():
             self.place_bar.pack(side="top", fill="x", padx=2, pady=(2, 0), before=self.obj_top)
@@ -3391,6 +3462,9 @@ class EditorApp:
         was = self.place is not None
         self.place = None
         self.canvas.config(cursor=TOOL_CURSORS[self.tool])
+        for name, btn in self.tool_buttons.items():
+            btn.set_active(name == self.tool)
+        self.update_mode_bar()
         self.canvas.delete("rubber")
         if getattr(self, "place_bar", None) is not None:
             self.place_bar.pack_forget()
@@ -3518,6 +3592,8 @@ class EditorApp:
             if new is not None:
                 self.select(new)
                 self.place_lbl.config(text=label())
+                self.place["label"] = label()
+                self.update_mode_bar()
                 self.status(f"{label()} (Enter, Esc or right-click ends)", "ok")
 
         def label():
@@ -4153,6 +4229,10 @@ class EditorApp:
         if self.place:
             self.end_place("Placement finished.")
             return
+        if self.tool in TERRAIN_TOOLS:
+            self.set_tool("select")
+            self.status("Terrain tool ended.")
+            return
         target = self.hit(e.x, e.y, exact=bool(e.state & ALT_MASK))
         if target is not None and target not in self.sel:
             self.select(target)
@@ -4224,8 +4304,9 @@ class EditorApp:
         if self.tool not in TERRAIN_TOOLS or not self.model:
             return
         r = self.brush_size.get() * self.view.scale
-        c.create_oval(x - r, y - r, x + r, y + r, outline="#000000", width=3, tags="brush")
-        c.create_oval(x - r, y - r, x + r, y + r, outline="#FFFFFF", width=1, tags="brush")
+        c.create_oval(x - r, y - r, x + r, y + r, outline="#000000", width=4, tags="brush")
+        c.create_oval(x - r, y - r, x + r, y + r, outline=BRUSH_COLOURS.get(self.tool, "#FFFFFF"), width=2,
+                      tags="brush")
 
     def on_hover(self, e):
         self.mouse = (e.x, e.y)
@@ -4272,8 +4353,9 @@ class EditorApp:
         elif k == "escape":
             if self.place:
                 self.end_place("Placement finished.")
-            elif self.tool in TERRAIN_TOOLS:
+            elif self.tool != "select":
                 self.set_tool("select")
+                self.status("Select / move.")
             else:
                 self.select(None)
         elif k == "w":

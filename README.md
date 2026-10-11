@@ -51,7 +51,8 @@ The editor finds the game in your Steam libraries or asks for its folder
 | Right-click, middle or right drag, wheel | context menu, pan, zoom |
 | Ctrl+X / C / V | cut / copy / paste (at the cursor) |
 | Del, Ctrl+D, Q / E | delete, duplicate, rotate |
-| Ctrl+Z, Ctrl+S, Ctrl+A, Esc | undo, save, select all, clear |
+| Ctrl+Z, Ctrl+S, Ctrl+A | undo, save, select all |
+| Esc | back to Select / move, then clear the selection |
 
 Help > Controls lists all shortcuts.
 
