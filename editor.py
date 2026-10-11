@@ -107,21 +107,25 @@ TOC_LAYERS = [
 ]
 TOC_DEFAULT_OFF = {"Deleted", "Elevation", "Contours", "NavMesh"}
 TOC_OVERLAYS = {"Elevation", "Contours", "NavMesh"}
-OBJ_HINT = ("Double-click an item to place it at the map centre, or drag it onto the map. New route: "
-            "double-click or drag it, then click its waypoints; Finish, Enter, Esc or right-click ends.")
+OBJ_HINT = ("Click an item to choose the Add tool for it, then click on the map to place one with each "
+            "click. Dragging an item onto the map places one directly.")
 DOUBLE_CLICK_MS = 400
 EVENT_MARK = 18
 
 TOOLS = ("select", "pan", "zoomin", "zoomout", "rotate")
 TOOL_CURSORS = {"select": "arrow", "pan": "hand2", "zoomin": "crosshair", "zoomout": "crosshair",
                 "rotate": "exchange", "texture": "spraycan", "raise": "sb_up_arrow", "lower": "sb_down_arrow",
-                "flatten": "sb_h_double_arrow", "smooth": "circle", "place": "plus"}
+                "flatten": "sb_h_double_arrow", "smooth": "circle", "add": "plus"}
 BRUSH_COLOURS = {"texture": "#2E9E3E", "raise": "#D2691E", "lower": "#2F6FD0", "flatten": "#B8A000",
                  "smooth": "#9050C0"}
-MODE_BAR_BG = "#FFF6D5"
+MESSAGE_COLOURS = {None: ("#DCEAF8", "#7FA7D6"), "ok": ("#DFF0D8", "#79B26B"),
+                   "warn": ("#FCF3CF", "#D2B03C")}
+MESSAGE_MS = {None: 5000, "ok": 5000, "warn": 10000}
+ADD_BUTTONS = {("spawn", 1): "add:hostile", ("spawn", 0): "add:friendly", ("route",): "add:route",
+               ("waypoint",): "add:waypoint"}
 TOOL_NAMES = {"select": "Select / move", "pan": "Pan", "zoomin": "Zoom in", "zoomout": "Zoom out",
               "rotate": "Rotate", "texture": "Terrain texture", "raise": "Raise terrain", "lower": "Lower terrain",
-              "flatten": "Flatten terrain", "smooth": "Smooth terrain"}
+              "flatten": "Flatten terrain", "smooth": "Smooth terrain", "add": "Add"}
 TERRAIN_TOOLS = ("texture", "raise", "lower", "flatten", "smooth")
 PAINT_DAB_STRENGTH = 0.35
 SHAPE_DAB_STRENGTH = 0.5
@@ -763,7 +767,10 @@ class EditorApp:
         self._table_sync = False
         self.clipboard = None
         self.mouse = None
-        self.place = None
+        self.sketch = None
+        self.add_item = None
+        self.space_down = False
+        self._obj_sync = False
         self.scenes, self.custom_titles = [], {}
         self.layers = {key: key not in TOC_DEFAULT_OFF for key, *_ in TOC_LAYERS}
         apply_classic_style(root)
@@ -1161,10 +1168,10 @@ class EditorApp:
                            ("Select parent", self.select_parent, "P", "parent"),
                            ("Clear selection", lambda: self.select(None), "Esc")])
         menu("Insert", [("Object...", self.add_object, "", "addobj"),
-                        ("Hostile tank", lambda: self.add_spawn(True), "", "addhost"),
-                        ("Friendly tank", lambda: self.add_spawn(False), "", "addfriend"), None,
-                        ("Waypoint", self.add_waypoint, "W", "addwp"),
-                        ("Route", self.add_route, "", "addroute"),
+                        ("Hostile tank", lambda: self.use_template(("spawn", 1)), "", "addhost"),
+                        ("Friendly tank", lambda: self.use_template(("spawn", 0)), "", "addfriend"), None,
+                        ("Waypoint", lambda: self.use_template(("waypoint",)), "", "addwp"),
+                        ("Route", lambda: self.use_template(("route",)), "", "addroute"),
                         ("Event...", self.add_event, "", "addevent")])
         menu("Scenario", [("New scenario...", self.new_scenario, "", "newscen"),
                           ("Mission text...", self.edit_mission_text),
@@ -1211,16 +1218,20 @@ class EditorApp:
             "Events are shown on the map with the symbol of their type (Events layer); events at the same "
             "spot are laid out side by side. Their position only places the symbol: the game does not use "
             "it.\n"
-            "Insert: W adds a waypoint at the cursor to the selected route; Insert > Route starts a new route; "
+            "Insert: W adds a waypoint at the pointer to the selected route; Insert > Route (or New route in "
+            "the Objects pane) draws a new route: click the waypoints, right-click to finish; "
             "Insert > Event... creates a new event or copies one from this or another mission.\n\n"
             "Tables: double-click a cell (or F2 for the name) to edit it; Enter applies, Esc cancels. "
             "Deleted rows are shown when the Deleted objects layer is on. Insert adds a row: a tank of the "
             "selected side, an event of the selected type, or a waypoint after the selected one. "
             "The Scenery table follows the scenery layers.\n\n"
+            "Tools: one map tool is active at a time (pressed on the toolbar, named in the status bar with "
+            "its instructions); it stays active until you choose another. Choosing an item in the Objects pane "
+            "chooses the Add tool for it. In every tool the wheel zooms and Space or the middle button pans.\n\n"
             "Keys: Q / E rotate by the step (Shift: 1 deg), Del delete / restore, Ctrl+D duplicate, Ctrl+Z undo, "
             "Ctrl+S save, P select parent, F zoom to selection, Home full extent, Tab next spawn, "
-            "L events list, T terrain follow, Esc back to Select / move (a second Esc clears the selection). "
-            "A bar over the map shows any other active tool; Esc or a right-click ends it."), parent=self.root)
+            "L events list, T terrain follow, Esc cancels the route being drawn or clears the selection."),
+            parent=self.root)
 
     def show_about(self):
         game = self.ctx.root if self.ctx else "(none)"
@@ -1272,8 +1283,12 @@ class EditorApp:
         self.canvas = tk.Canvas(self.mapframe, background=WORKSPACE, highlightthickness=0, bd=0, takefocus=1)
         self.canvas.pack(fill="both", expand=True)
         self._base_item = self.canvas.create_image(0, 0, anchor="nw")
-        self.mode_bar = tk.Label(self.mapframe, anchor="w", padx=8, pady=3, bg=MODE_BAR_BG, font=UI_BOLD,
-                                 highlightthickness=1, highlightbackground=BORDER)
+        self.msg_bar = tk.Frame(self.mapframe, highlightthickness=1)
+        self.msg_lbl = tk.Label(self.msg_bar, anchor="w", justify="left", padx=8, pady=4)
+        self.msg_lbl.pack(side="left", fill="x", expand=True)
+        self.msg_close = tk.Label(self.msg_bar, text="x", padx=8, cursor="hand2")
+        self.msg_close.pack(side="right")
+        self.msg_close.bind("<Button-1>", lambda e: self.hide_message())
         self.docks["bottom"] = DockArea(self.vpane, lambda: self.hide_dock("bottom"))
         self.build_table(self.docks["bottom"].add_page("spawns", "Table - Spawns", self.image("table")), "spawns")
         self.build_table(self.docks["bottom"].add_page("events", "Table - Events", self.image("events")), "events")
@@ -1282,7 +1297,6 @@ class EditorApp:
         self.build_table(self.docks["bottom"].add_page("scenery", "Table - Scenery", self.image("objects")),
                          "scenery")
         self.docks["bottom"].on_select = lambda key: self.refresh_tables()
-        self.docks["left"].on_select = self.on_left_page
 
         self.docks["right"] = DockArea(self.hpane, lambda: self.hide_dock("right"))
         self.build_properties(self.docks["right"].add_page("props", "Properties", self.image("props")))
@@ -1298,11 +1312,6 @@ class EditorApp:
         self.bind_canvas()
         self.set_tool("select")
         root.bind_all("<ButtonPress>", self.on_any_click, add="+")
-
-    def on_left_page(self, key):
-        if key != "terrain" and self.tool in TERRAIN_TOOLS:
-            self.set_tool("select")
-            self.status("Terrain tool ended (Terrain tab left).")
 
     def on_any_click(self, e):
         """Highlight the caption of the dock the user is working in."""
@@ -1390,11 +1399,16 @@ class EditorApp:
         self.follow_btn = follow
         self.follow_var.trace_add("write", lambda *a: self.follow_btn.set_active(self.follow_var.get()))
         self.follow_btn.set_active(True)
-        block("Insert", [("addobj", "Add object...", self.add_object),
-                         ("addhost", "Add hostile tank", lambda: self.add_spawn(True)),
-                         ("addfriend", "Add friendly tank", lambda: self.add_spawn(False)), None,
-                         ("addwp", "Add waypoint: click on the map (W)", self.add_waypoint),
-                         ("addroute", "Add route (copy of the selected route)", self.add_route),
+        block("Insert", [("addobj", "Add object: the object chosen in the Objects pane, or choose one",
+                          self.tool_add_object, "add:object"),
+                         ("addhost", "Add hostile tank: click on the map", lambda: self.use_template(("spawn", 1)),
+                          "add:hostile"),
+                         ("addfriend", "Add friendly tank: click on the map", lambda: self.use_template(("spawn", 0)),
+                          "add:friendly"), None,
+                         ("addwp", "Add waypoint: click on the map (W adds one at the pointer)",
+                          lambda: self.use_template(("waypoint",)), "add:waypoint"),
+                         ("addroute", "New route: click its waypoints on the map", lambda: self.use_template(("route",)),
+                          "add:route"),
                          ("addevent", "Add event...", self.add_event), None,
                          ("newscen", "New scenario...", self.new_scenario)])
         block("Terrain", [("tbrush", "Texture: paint the ground layer chosen on the Terrain tab",
@@ -1614,11 +1628,6 @@ class EditorApp:
         self.layers_changed()
 
     def build_objects(self, body):
-        self.place_bar = tk.Frame(body, bg="#FFF6D5", highlightthickness=1, highlightbackground="#D6B656")
-        self.place_lbl = tk.Label(self.place_bar, anchor="w", justify="left", bg="#FFF6D5", wraplength=200)
-        self.place_lbl.pack(side="left", fill="x", expand=True, padx=4, pady=3)
-        ttk.Button(self.place_bar, text="Finish", width=8, command=lambda: self.end_place("Placement finished.")).pack(
-            side="right", padx=3, pady=3)
         top = tk.Frame(body)
         top.pack(side="top", fill="x", padx=2, pady=(2, 0))
         self.obj_top = top
@@ -1646,7 +1655,7 @@ class EditorApp:
         self.obj_tree.configure(yscrollcommand=sb.set)
         sb.pack(side="right", fill="y")
         self.obj_tree.pack(side="left", fill="both", expand=True)
-        self.obj_tree.bind("<Double-Button-1>", lambda e: (self.place_selected_object(), "break")[1])
+        self.obj_tree.bind("<<TreeviewSelect>>", lambda e: self.on_obj_select(), add="+")
         self.obj_tree.bind("<ButtonPress-1>", self.on_obj_press, add="+")
         self.obj_tree.bind("<B1-Motion>", self.on_obj_motion)
         self.obj_tree.bind("<ButtonRelease-1>", self.on_obj_release, add="+")
@@ -1658,13 +1667,10 @@ class EditorApp:
         holder.pack(side="top", fill="both", expand=True, padx=2, pady=2)
         self.terr_layers = ttk.Treeview(holder, show="tree", selectmode="browse", height=8)
         self.terr_layers.pack(fill="both", expand=True)
-        self.terr_layers.bind("<<TreeviewSelect>>", lambda e: self.update_mode_bar(), add="+")
         form = tk.Frame(body)
         form.pack(side="top", fill="x", padx=4, pady=4)
         self.brush_size = tk.DoubleVar(value=10.0)
         self.brush_strength = tk.DoubleVar(value=50.0)
-        for var in (self.brush_size, self.brush_strength):
-            var.trace_add("write", lambda *_: self.update_mode_bar())
         self.brush_step = tk.DoubleVar(value=0.5)
         rows = (("Size", self.brush_size, 1, 100, " m", "{:.0f}", "Brush radius"),
                 ("Strength", self.brush_strength, 1, 100, " %", "{:.0f}", "How much one brush dab changes"),
@@ -1693,7 +1699,6 @@ class EditorApp:
         fl = tk.Frame(form)
         fl.grid(row=r + 1, column=1, columnspan=2, sticky="w", padx=4, pady=(4, 0))
         self.flatten_height = tk.StringVar(value="")
-        self.flatten_height.trace_add("write", lambda *_: self.update_mode_bar())
         ent = ttk.Entry(fl, textvariable=self.flatten_height, width=8)
         ent.pack(side="left")
         ToolTip(ent, "Height in metres; empty: the height where the stroke starts")
@@ -2028,30 +2033,43 @@ class EditorApp:
 
     def place_item(self, iid, x, z):
         """Place Objects pane item iid (template or library object) at (x, z)."""
-        if self.tool != "select":
-            self.set_tool("select")
         if iid in self.obj_templates:
             self.create_at(self.obj_templates[iid], x, z)
         elif iid in self.obj_entries:
             self.place_object(self.obj_entries[iid], x, z)
 
     def place_selected_object(self):
+        """Place at map centre: one item of the Objects pane at the centre of the view."""
         sel = self.obj_tree.selection()
         if not sel or (sel[0] not in self.obj_entries and sel[0] not in self.obj_templates):
             self.status("Select an object in the Objects pane first.", banner=True)
             return
-        self.end_place()
-        if self.obj_templates.get(sel[0]) == ("route",):
-            self.add_route()
+        if tuple(self.obj_templates.get(sel[0], ())) == ("route",):
+            self.add_route((self.view.cx, self.view.cz))
             return
         self.place_item(sel[0], self.view.cx, self.view.cz)
+
+    def on_obj_select(self):
+        """Choosing an item in the Objects pane chooses the Add tool for it (as a
+        template in ArcGIS Create Features)."""
+        if self._obj_sync:
+            return
+        sel = self.obj_tree.selection()
+        if not sel:
+            return
+        iid = sel[0]
+        if iid in self.obj_templates:
+            key = tuple(self.obj_templates[iid])
+            title = self.obj_item_label(iid)
+            self.set_tool("add", ("template", key, title.lower() if key[0] == "spawn" else title))
+        elif iid in self.obj_entries:
+            e = self.obj_entries[iid]
+            self.set_tool("add", ("object", e, e["name"]))
 
     def on_obj_press(self, e):
         item = self.obj_tree.identify_row(e.y)
         known = item in self.obj_entries or item in self.obj_templates
         self.obj_drag = {"item": item, "start": (e.x_root, e.y_root), "active": False} if known else None
-        if known and self.tool in TERRAIN_TOOLS:
-            self.set_tool("select")
 
     def on_obj_motion(self, e):
         d = self.obj_drag
@@ -2075,7 +2093,6 @@ class EditorApp:
         x = e.x_root - self.canvas.winfo_rootx()
         y = e.y_root - self.canvas.winfo_rooty()
         wx, wz = self.view.s2w(x, y)
-        self.end_place()
         self.place_item(d["item"], wx, wz)
 
     TABLE_COLUMNS = {
@@ -2575,60 +2592,94 @@ class EditorApp:
         r.bind_all("<Shift-Insert>", edit_key(self.paste))
         r.bind_all("<Shift-Delete>", edit_key(self.cut_selection))
         r.bind("<Key>", self.on_key)
+        r.bind("<KeyPress-space>", self.on_space, add="+")
+        r.bind("<KeyRelease-space>", self.on_space, add="+")
 
     # ---- helpers -----------------------------------------------------
 
-    def set_tool(self, tool):
-        """Make `tool` the one active tool; placing or route drawing ends."""
-        if getattr(self, "place", None) is not None:
-            self.end_place()
+    def set_tool(self, tool, item=None):
+        """Make `tool` the one active map tool. As in QGIS and ArcGIS it stays
+        active until another tool is chosen; tabs and panels do not change it.
+        The "add" tool places `item` (("template", key, label) or ("object",
+        entry, label)) with each click on the map."""
+        if self.sketch is not None:
+            self.finish_sketch()
         self.tool = tool
+        self.add_item = item if tool == "add" else None
+        tree = getattr(self, "obj_tree", None)
+        if tool != "add" and tree is not None and tree.selection():
+            tree.selection_remove(*tree.selection())
         if tool not in TERRAIN_TOOLS:
             self.canvas.delete("brush")
+        key = self.tool_key()
         for name, btn in self.tool_buttons.items():
-            btn.set_active(name == tool)
-        self.canvas.config(cursor=TOOL_CURSORS[tool])
-        self.tool_lbl.config(text=f"Tool: {TOOL_NAMES[tool]}")
-        self.update_mode_bar()
+            btn.set_active(name == key)
+        self.canvas.config(cursor=self.cursor())
+        self.tool_lbl.config(text=f"Tool: {self.tool_title()}")
+        self.status(self.tool_hint())
 
-    def to_select(self):
-        """Back to Select / move (from any tool, placing or route drawing)."""
-        if self.tool != "select" or getattr(self, "place", None) is not None:
-            self.set_tool("select")
+    def tool_key(self):
+        """Toolbar button of the active tool."""
+        if self.tool != "add":
+            return self.tool
+        kind, value, _ = self.add_item
+        if kind == "template":
+            return ADD_BUTTONS.get(tuple(value))
+        return "add:object"
 
-    def mode_text(self):
-        """Text of the mode bar over the map, or None in Select / move."""
-        if getattr(self, "place", None) is not None:
-            return f"Placing: {self.place['label']} - Enter, Esc or right-click ends"
+    def tool_title(self):
+        return f"Add {self.add_item[2]}" if self.tool == "add" else TOOL_NAMES[self.tool]
+
+    def cursor(self):
+        if self.space_down:
+            return TOOL_CURSORS["pan"]
+        return TOOL_CURSORS["add"] if self.sketch is not None else TOOL_CURSORS[self.tool]
+
+    def tool_hint(self):
+        """Instructions of the active tool for the status bar."""
         tool = self.tool
+        if self.sketch is not None:
+            return self.sketch_hint()
+        if tool == "add":
+            kind, value, title = self.add_item
+            if kind == "template" and tuple(value) == ("route",):
+                return ("New route: click its first waypoint, then the next ones. Right-click, double-click or "
+                        "Enter finishes; Backspace removes the last waypoint; Esc cancels the route.")
+            if kind == "template" and tuple(value) == ("waypoint",):
+                return "Waypoint: click on the map to add a waypoint after the selected one of the selected route."
+            return f"Add {title}: click on the map to place one. Choose another tool to stop."
         if tool in TERRAIN_TOOLS:
-            what = TOOL_NAMES[tool]
-            if tool == "texture" and self.model and self.model.terrain is not None:
-                names = self.model.terrain.layer_names
-                layer = self.paint_layer()
-                if layer < len(names):
-                    what += f" ({names[layer].replace('Terrain_Layer', '').strip(' ()')})"
-            extra = ""
-            if tool == "flatten" and self.flatten_height.get().strip():
-                extra = f", to {self.flatten_height.get().strip()} m"
-            return (f"Terrain: {what} - brush {self.brush_size.get():.0f} m, strength "
-                    f"{self.brush_strength.get():.0f} %{extra} - Esc or right-click ends")
-        if tool != "select":
-            return f"{TOOL_NAMES[tool]} - Esc returns to Select / move"
-        return None
+            what = "paints the ground layer chosen" if tool == "texture" else "changes the ground"
+            return f"{TOOL_NAMES[tool]}: click or drag on the map; the brush {what} (settings on the Terrain tab)."
+        return {"select": "Select / move: click to select (Shift adds, Ctrl toggles), drag to move, drag on "
+                          "empty map for a selection box.",
+                "pan": "Pan: drag the map.",
+                "zoomin": "Zoom in: click, or drag a box.",
+                "zoomout": "Zoom out: click.",
+                "rotate": "Rotate: drag around the selection (Shift snaps to the step)."}.get(tool, "")
 
-    def update_mode_bar(self):
-        bar = getattr(self, "mode_bar", None)
-        if bar is None:
-            return
-        text = self.mode_text()
-        if text is None:
-            bar.place_forget()
-            return
-        colour = BRUSH_COLOURS.get(self.tool) if getattr(self, "place", None) is None else None
-        bar.config(text=text, highlightbackground=colour or BORDER, highlightthickness=2 if colour else 1)
-        bar.place(x=0, y=0, relwidth=1.0)
-        bar.lift()
+    def use_template(self, key):
+        """Choose the Add tool for an Objects pane template (tank, route,
+        waypoint, event) and show it chosen in the Objects pane."""
+        iid = next((i for i, k in self.obj_templates.items() if tuple(k) == tuple(key)), None)
+        title = self.obj_item_label(iid) if iid else str(key)
+        if iid:
+            self._obj_sync = True
+            self.obj_tree.selection_set(iid)
+            self.obj_tree.see(iid)
+            self.root.update_idletasks()
+            self._obj_sync = False
+        self.set_tool("add", ("template", tuple(key), title.lower() if key[0] == "spawn" else title))
+
+    def tool_add_object(self):
+        """Add object button: the Add tool for the object chosen in the Objects
+        pane, else a list to choose one."""
+        sel = self.obj_tree.selection()
+        if sel and sel[0] in self.obj_entries:
+            e = self.obj_entries[sel[0]]
+            self.set_tool("add", ("object", e, e["name"]))
+        else:
+            self.add_object()
 
     def toggle_follow(self):
         self.follow_var.set(not self.follow_var.get())
@@ -2641,18 +2692,22 @@ class EditorApp:
             self.show_banner(text, kind)
 
     def show_banner(self, text, kind=None):
-        c = self.canvas
-        c.delete("banner")
-        w = max(200, c.winfo_width())
-        top = 26 + (30 if getattr(self, "mode_bar", None) is not None and self.mode_bar.place_info() else 0)
-        t = c.create_text(w // 2, top, text=text, font=UI_FONT, anchor="n", tags="banner",
-                          fill={"warn": WARN_FG}.get(kind, "#000000"), width=w - 80)
-        x0, y0, x1, y1 = c.bbox(t)
-        r = c.create_rectangle(x0 - 12, y0 - 7, x1 + 12, y1 + 7, fill=INFO_BG, outline="#000000", tags="banner")
-        c.tag_lower(r, t)
+        """Message bar along the top of the map (as in QGIS): information hides
+        after a few seconds, a warning stays longer; x closes it."""
+        bg, edge = MESSAGE_COLOURS.get(kind, MESSAGE_COLOURS[None])
+        self.msg_bar.config(bg=bg, highlightbackground=edge)
+        self.msg_lbl.config(text=text, bg=bg, fg={"warn": WARN_FG}.get(kind, "#000000"),
+                            wraplength=max(200, self.canvas.winfo_width() - 60))
+        self.msg_close.config(bg=bg)
+        self.msg_bar.place(x=0, y=0, relwidth=1.0)
+        self.msg_bar.lift()
         if self._banner_after:
             self.root.after_cancel(self._banner_after)
-        self._banner_after = self.root.after(4000, lambda: c.delete("banner"))
+        self._banner_after = self.root.after(MESSAGE_MS.get(kind, 5000), self.hide_message)
+
+    def hide_message(self):
+        self._banner_after = None
+        self.msg_bar.place_forget()
 
     def busy(self, text, banner=True):
         self.status(text)
@@ -3143,9 +3198,9 @@ class EditorApp:
             src = self.library.source_label(e)
             items.append((f"{e['category']:<18} {e['name']:<42} {e['w']:>5.0f} x {e['d']:<5.0f} m   [{src}]", e))
         entry = ListDialog(self.root, "Add object", items,
-                           prompt="Choose an object; it is placed at the centre of the map view.").run()
+                           prompt="Choose an object; then click on the map to place it.").run()
         if entry is not None:
-            self.place_object(entry, self.view.cx, self.view.cz)
+            self.set_tool("add", ("object", entry, entry["name"]))
 
     def place_object(self, entry, wx, wz):
         m = self.model
@@ -3440,48 +3495,17 @@ class EditorApp:
 
     # ---- insert: waypoints, routes, events ------------------------------
 
-    def start_place(self, text, fn, repeat=False, label=None, anchor=None):
-        """Placing mode: the next left click on the map calls fn(x, z) (every
-        click with repeat). Finish, Enter, Esc or a right-click ends it; a
-        double-click places once more and ends it. anchor() returns the world
-        point a guide line is drawn from (the last waypoint of a route)."""
-        if self.tool != "select" or self.place is not None:
-            self.set_tool("select")
-        self.place = {"fn": fn, "repeat": repeat, "anchor": anchor, "last": None, "label": label or text}
-        for btn in self.tool_buttons.values():
-            btn.set_active(False)
-        self.canvas.config(cursor=TOOL_CURSORS["place"])
-        self.update_mode_bar()
-        self.place_lbl.config(text=label or text)
-        if not self.place_bar.winfo_ismapped():
-            self.place_bar.pack(side="top", fill="x", padx=2, pady=(2, 0), before=self.obj_top)
-        self.status(text + " (Enter, Esc or right-click ends)")
-        self.draw_rubber()
-
-    def end_place(self, text=None):
-        was = self.place is not None
-        self.place = None
-        self.canvas.config(cursor=TOOL_CURSORS[self.tool])
-        for name, btn in self.tool_buttons.items():
-            btn.set_active(name == self.tool)
-        self.update_mode_bar()
-        self.canvas.delete("rubber")
-        if getattr(self, "place_bar", None) is not None:
-            self.place_bar.pack_forget()
-        if text and was:
-            self.status(text)
-
     def draw_rubber(self):
-        """Dashed guide line from the route's last waypoint to the pointer."""
+        """Dashed guide line from the last waypoint of the route being drawn to the pointer."""
         c = self.canvas
         c.delete("rubber")
-        p = self.place
-        if not p or not p.get("anchor") or not self.mouse or not self.model:
+        if self.sketch is None or not self.mouse or not self.model:
             return
-        a = p["anchor"]()
-        if a is None:
+        a = self.sketch_after()
+        if a is None or a not in self.model.tr:
             return
-        ax, ay = self.view.w2s(a[0], a[2])
+        p = self.model.world(a)[0]
+        ax, ay = self.view.w2s(p[0], p[2])
         c.create_line(ax, ay, *self.mouse, fill="#000000", width=3, dash=(6, 4), tags="rubber")
         c.create_line(ax, ay, *self.mouse, fill="#FFD040", width=1, dash=(6, 4), tags="rubber")
 
@@ -3501,27 +3525,26 @@ class EditorApp:
         return None
 
     def add_waypoint(self, at=None):
-        """W / Insert > Waypoint: with `at`, one waypoint there after the selected
-        one; without, start adding waypoints to the selected route by clicking.
+        """One waypoint at `at` after the selected one of the selected route; W
+        and the Waypoint tool use it. Without `at`, the Waypoint tool is chosen.
         Returns False when no route is selected."""
         m = self.model
         if not m:
             return False
+        if at is None:
+            self.use_template(("waypoint",))
+            return True
         route = self.target_route()
         if not route:
             self.status("Select a route, one of its waypoints, or a tank with a route first.", "warn", banner=True)
             return False
         pack, after = route
-        if at is None:
-            self.continue_route(pack)
-            return True
         new = self.op("Add waypoint", m.new_waypoint, pack, after, self.ground_point(*at))
         if new is not None:
             self.select(new)
             kids = [c["m_PathID"] for c in m.tr[pack]["m_Children"]]
             n = kids.index(m.tr_of_go[new]) + 1 if m.tr_of_go[new] in kids else len(kids)
-            self.status(f"Added waypoint {n} of {m.name(m.go_of_tr[pack])}. Press W over the map for the next one.",
-                        "ok")
+            self.status(f"Added waypoint {n} of {m.name(m.go_of_tr[pack])}.", "ok")
         return True
 
     def ground_point(self, x, z):
@@ -3529,19 +3552,20 @@ class EditorApp:
         return (x, 0.0 if g is None else g, z)
 
     def add_route(self, at=None):
-        """New route: each click on the map adds the next waypoint; Esc ends."""
+        """New route with its first waypoint at `at`, then drawn on by clicking
+        (see start_sketch). Without `at`, the New route tool is chosen."""
         m = self.model
         if not m:
             return
         if at is None:
-            self.start_place("Click the first waypoint of the new route.", lambda x, z: self.add_route((x, z)))
+            self.use_template(("route",))
             return
+        start = len(m.undo_stack)
         new = self.op("Add route", m.new_route, self.ground_point(*at))
         if new is None:
             return
         self.select(new)
-        pack = m.waypoints[m.tr_of_go[new]]
-        self.continue_route(pack)
+        self.start_sketch(m.waypoints[m.tr_of_go[new]], start, created=True)
 
     def assign_route(self, evs, pack):
         """Give the AI tanks (spawn events) a route (pack transform, 0 = none)."""
@@ -3563,44 +3587,91 @@ class EditorApp:
             for e in evs:
                 m.assign_pack(e, pack)
             return wp
+        start = len(m.undo_stack)
         wp = self.op("New route", do)
         if wp is None:
             return
         self.select(wp)
-        self.continue_route(m.waypoints[m.tr_of_go[wp]])
+        self.start_sketch(m.waypoints[m.tr_of_go[wp]], start, created=True)
 
     def continue_route(self, pack):
-        """Add waypoints to route `pack` by clicking, each after the selected
+        """Draw on route `pack`: each click adds a waypoint after the selected
         waypoint of that route (or at the end)."""
+        self.start_sketch(pack, len(self.model.undo_stack), created=False)
+
+    def start_sketch(self, pack, start, created):
+        """Route drawing, as a line in QGIS / ArcGIS: left click adds a waypoint,
+        right-click, double-click or Enter finishes, Backspace removes the last
+        waypoint, Esc cancels. `start` is the undo depth before the route's
+        first edit (cancel undoes back to it); `created`: the route is new."""
+        self.sketch = {"pack": pack, "start": start, "created": created, "last": None}
+        self.canvas.config(cursor=self.cursor())
+        self.status(self.sketch_hint())
+        self.draw_rubber()
+
+    def sketch_after(self):
+        """Waypoint transform the next one is added after."""
+        m, pack = self.model, self.sketch["pack"]
+        trp = m.tr_of_go.get(self.selected) if self.selected in m.go else None
+        if trp in m.waypoints and m.waypoints[trp] == pack:
+            return trp
+        kids = m.tr[pack]["m_Children"] if pack in m.tr else []
+        return kids[-1]["m_PathID"] if kids else None
+
+    def sketch_hint(self):
+        m, pack = self.model, self.sketch["pack"]
+        n = len(m.tr[pack]["m_Children"]) if pack in m.tr else 0
+        return (f"Route {m.name(m.go_of_tr[pack])}: {n} waypoint(s). Click the next waypoint; right-click, "
+                "double-click or Enter finishes, Backspace removes the last, Esc cancels.")
+
+    def sketch_click(self, e):
+        s = self.sketch
+        now = getattr(e, "time", 0)
+        last = s.get("last")
+        if last and 0 <= now - last[2] < DOUBLE_CLICK_MS and abs(e.x - last[0]) < 6 and abs(e.y - last[1]) < 6:
+            self.finish_sketch()
+            return
+        s["last"] = (e.x, e.y, now)
+        m, pack = self.model, s["pack"]
+        if pack not in m.tr:
+            self.sketch = None
+            return
+        x, z = self.view.s2w(e.x, e.y)
+        new = self.op("Add waypoint", m.new_waypoint, pack, self.sketch_after(), self.ground_point(x, z))
+        if new is not None:
+            self.select(new)
+            self.status(self.sketch_hint())
+        self.draw_rubber()
+
+    def finish_sketch(self):
+        s, self.sketch = self.sketch, None
+        self.canvas.delete("rubber")
+        self.canvas.config(cursor=self.cursor())
+        if s and self.model and s["pack"] in self.model.tr:
+            m = self.model
+            n = len(m.tr[s["pack"]]["m_Children"])
+            self.status(f"Route {m.name(m.go_of_tr[s['pack']])} finished: {n} waypoint(s).", "ok")
+
+    def cancel_sketch(self):
+        """Esc: undo the route drawn so far (a new route disappears)."""
+        s, self.sketch = self.sketch, None
+        self.canvas.delete("rubber")
+        self.canvas.config(cursor=self.cursor())
         m = self.model
+        while m is not None and len(m.undo_stack) > s["start"]:
+            self.undo()
+        self.status("Route drawing cancelled.")
 
-        def after():
-            trp = m.tr_of_go.get(self.selected) if self.selected in m.go else None
-            if trp in m.waypoints and m.waypoints[trp] == pack:
-                return trp
-            kids = m.tr[pack]["m_Children"] if pack in m.tr else []
-            return kids[-1]["m_PathID"] if kids else None
-
-        def anchor():
-            a = after()
-            return m.world(a)[0] if a in m.tr else None
-
-        def next_point(x, z):
-            if not self.model or pack not in m.tr:
-                return
-            new = self.op("Add waypoint", m.new_waypoint, pack, after(), self.ground_point(x, z))
-            if new is not None:
-                self.select(new)
-                self.place_lbl.config(text=label())
-                self.place["label"] = label()
-                self.update_mode_bar()
-                self.status(f"{label()} (Enter, Esc or right-click ends)", "ok")
-
-        def label():
-            n = len(m.tr[pack]["m_Children"]) if pack in m.tr else 0
-            return f"Route {m.name(m.go_of_tr[pack])}: {n} waypoint(s). Click the next waypoint."
-
-        self.start_place(label(), next_point, repeat=True, label=label(), anchor=anchor)
+    def sketch_backspace(self):
+        """Backspace: remove the last waypoint drawn; the first waypoint of a new
+        route cancels the route."""
+        s, m = self.sketch, self.model
+        if len(m.undo_stack) > s["start"] + (1 if s["created"] else 0):
+            self.undo()
+            self.status(self.sketch_hint())
+            self.draw_rubber()
+        elif s["created"]:
+            self.cancel_sketch()
 
     def add_event(self):
         m = self.model
@@ -4032,25 +4103,27 @@ class EditorApp:
                         best = m.object_root(best)
         return best
 
+    def add_click(self, e):
+        """Add tool: place one of the chosen item at the click."""
+        kind, value, _ = self.add_item
+        x, z = self.view.s2w(e.x, e.y)
+        if kind == "template":
+            self.create_at(value, x, z)
+        else:
+            self.place_object(value, x, z)
+
     def on_press(self, e):
         self.canvas.focus_set()
         if not self.model:
             return
-        if self.place:
-            place = self.place
-            now = getattr(e, "time", 0)
-            last = place.get("last")
-            if (place.get("repeat") and last and 0 <= now - last[2] < DOUBLE_CLICK_MS
-                    and abs(e.x - last[0]) < 6 and abs(e.y - last[1]) < 6):
-                self.end_place("Placement finished.")
-                return
-            place["last"] = (e.x, e.y, now)
-            if not place.get("repeat"):
-                self.end_place()
-            place["fn"](*self.view.s2w(e.x, e.y))
-            if self.place is not None and self.place is not place:
-                self.place["last"] = (e.x, e.y, now)
-            self.draw_rubber()
+        if self.space_down:
+            self.on_pan_start(e)
+            return
+        if self.sketch is not None:
+            self.sketch_click(e)
+            return
+        if self.tool == "add":
+            self.add_click(e)
             return
         if self.tool in TERRAIN_TOOLS:
             self.start_paint(e)
@@ -4222,16 +4295,12 @@ class EditorApp:
 
     def context_menu(self, e):
         """Right-click menu (Windows standard): selects the object under the
-        pointer first when it is not selected yet. While placing, a right-click
-        finishes instead."""
+        pointer first when it is not selected yet. While a route is drawn, a
+        right-click finishes it instead."""
         if not self.model:
             return
-        if self.place:
-            self.end_place("Placement finished.")
-            return
-        if self.tool in TERRAIN_TOOLS:
-            self.set_tool("select")
-            self.status("Terrain tool ended.")
+        if self.sketch is not None:
+            self.finish_sketch()
             return
         target = self.hit(e.x, e.y, exact=bool(e.state & ALT_MASK))
         if target is not None and target not in self.sel:
@@ -4311,7 +4380,7 @@ class EditorApp:
     def on_hover(self, e):
         self.mouse = (e.x, e.y)
         self.draw_brush(e.x, e.y)
-        if self.place and self.place.get("anchor"):
+        if self.sketch is not None:
             self.draw_rubber()
         if not self.model:
             return
@@ -4320,6 +4389,16 @@ class EditorApp:
         gtxt = f"   (ground {g:.1f})" if g is not None else ""
         self.coord_lbl.config(text=f"{wx:.2f}  {wz:.2f} Meters{gtxt}")
 
+    def on_space(self, e):
+        """Space held: temporary pan in every tool (as in QGIS)."""
+        if self.typing():
+            return None
+        down = str(e.type) in ("KeyPress", "2")
+        if down != self.space_down:
+            self.space_down = down
+            self.canvas.config(cursor=self.cursor())
+        return "break"
+
     def on_key(self, e):
         if not self.model or self.typing():
             return
@@ -4327,8 +4406,11 @@ class EditorApp:
         if k == "f5":
             self.start_game()
             return
-        if self.place and k in ("return", "kp_enter"):
-            self.end_place("Placement finished.")
+        if self.sketch is not None and k in ("return", "kp_enter"):
+            self.finish_sketch()
+            return
+        if self.sketch is not None and k == "backspace":
+            self.sketch_backspace()
             return
         if e.state & 0x4:
             return
@@ -4351,11 +4433,11 @@ class EditorApp:
         elif k == "o":
             self.choose_scene()
         elif k == "escape":
-            if self.place:
-                self.end_place("Placement finished.")
-            elif self.tool != "select":
-                self.set_tool("select")
-                self.status("Select / move.")
+            if self.sketch is not None:
+                self.cancel_sketch()
+            elif self.drag and self.drag.get("mode") in ("boxsel", "zoombox"):
+                self.drag = None
+                self.canvas.delete("rubber")
             else:
                 self.select(None)
         elif k == "w":
@@ -4516,7 +4598,6 @@ class EditorApp:
             self._base_key = key
         self.draw_overlay()
         c.tag_raise("rubber")
-        c.tag_raise("banner")
         self.zoom_lbl.config(text=f"1 : {max(1, round(3779.5 / max(v.scale, 1e-6))):,}".replace(",", " "))
 
     def draw_overlay(self):

@@ -1,7 +1,8 @@
 # Copyright (C) 2026 fierman
 # SPDX-License-Identifier: GPL-3.0-only
-"""Tools of the main window: one active tool at a time, visible in the cursor
-and the mode bar, and easy to leave (tabs, Objects pane, Esc, right-click).
+"""Map tools of the main window, after QGIS / ArcGIS: one exclusive tool that
+stays active until another is chosen (tabs do not change it), an Add tool
+chosen from the Objects pane, routes drawn like lines, hints in the status bar.
 
 Run: python -m unittest discover tests
 """
@@ -27,8 +28,8 @@ class Key:
 
 
 class Click:
-    def __init__(self, x, y, num=1):
-        self.x, self.y, self.num, self.state, self.time = x, y, num, 0, 0
+    def __init__(self, x, y, time=0, num=1):
+        self.x, self.y, self.num, self.state, self.time = x, y, num, 0, time
         self.x_root, self.y_root = x, y
 
 
@@ -46,55 +47,88 @@ class ToolTest(unittest.TestCase):
         cls.root.destroy()
 
     def state(self):
-        app = self.app
         self.root.update()
-        return app.tool, str(app.canvas.cget("cursor")), app.place is not None, bool(app.mode_bar.place_info())
+        return self.app.tool, str(self.app.canvas.cget("cursor"))
 
-    def test_one_tool_at_a_time(self):
+    def pressed(self):
+        return {name for name, btn in self.app.tool_buttons.items() if btn.active}
+
+    def test_tools_are_exclusive_and_persistent(self):
         app = self.app
-        app.set_tool("select")
-        self.assertEqual(self.state(), ("select", "arrow", False, False))
-
         app.set_tool("raise")
-        tool, cursor, placing, bar = self.state()
-        self.assertEqual((tool, cursor, placing, bar), ("raise", "sb_up_arrow", False, True))
-        self.assertIn("Raise", app.mode_bar.cget("text"))
-
-        # leaving the Terrain tab ends a terrain tool
-        app.show_page("left", "terrain")
+        self.assertEqual(self.state(), ("raise", "sb_up_arrow"))
+        self.assertIn("Raise terrain", app.status_lbl.cget("text"))
+        # tabs do not change the tool
         app.show_page("left", "objects")
-        self.assertEqual(self.state(), ("select", "arrow", False, False))
-
-        # Esc ends a terrain tool; a second Esc clears the selection
-        app.set_tool("smooth")
+        app.show_page("left", "toc")
+        self.assertEqual(self.state()[0], "raise")
+        # Esc clears the selection but keeps the tool
         app.on_key(Key("Escape"))
+        self.assertEqual(self.state()[0], "raise")
+        app.set_tool("pan")
+        self.assertEqual(self.state(), ("pan", "hand2"))
+        self.assertEqual(self.pressed(), {"pan"})
+        app.set_tool("select")
+
+    def test_add_tool_places_with_each_click(self):
+        app, m = self.app, self.app.model
+        app.set_tool("lower")
+        app.use_template(("spawn", 1))
+        self.assertEqual(self.state(), ("add", "plus"))
+        self.assertEqual(self.pressed(), {"add:hostile"})
+        self.assertIn("click on the map", app.status_lbl.cget("text"))
+        before = len(m.spawns)
+        w, h = 400, 300
+        app.view.w, app.view.h = w, h
+        app.on_press(Click(200, 150, time=1000))
+        app.on_press(Click(260, 150, time=5000))
+        self.assertEqual(len(m.spawns), before + 2)
+        self.assertEqual(self.state()[0], "add", "the Add tool stays active")
+        app.undo()
+        app.undo()
+        self.assertEqual(len(m.spawns), before)
+        app.set_tool("select")
+        self.root.update()
+        self.assertEqual(app.obj_tree.selection(), (), "choosing another tool clears the Objects pane choice")
         self.assertEqual(self.state()[0], "select")
 
-        # placing ends a terrain tool, has its own cursor and bar, and Esc ends it
-        app.set_tool("lower")
-        app.start_place("Click on the map.", lambda x, z: None, label="Test placing")
-        self.assertEqual(self.state(), ("select", "plus", True, True))
-        self.assertIn("Placing: Test placing", app.mode_bar.cget("text"))
+    def test_route_is_drawn_like_a_line(self):
+        app, m = self.app, self.app.model
+        app.view.w, app.view.h = 400, 300
+        depth = len(m.undo_stack)
+        packs = len(m.packs)
+        app.use_template(("route",))
+        app.on_press(Click(100, 100, time=1000))
+        self.assertIsNotNone(app.sketch)
+        pack = app.sketch["pack"]
+        app.on_press(Click(150, 100, time=3000))
+        app.on_press(Click(200, 120, time=5000))
+        self.assertEqual(len(m.tr[pack]["m_Children"]), 3)
+        app.on_key(Key("BackSpace"))
+        self.assertEqual(len(m.tr[pack]["m_Children"]), 2)
+        app.context_menu(Click(220, 120, num=3))
+        self.assertIsNone(app.sketch, "a right-click finishes the route")
+        self.assertEqual(len(m.packs), packs + 1)
+        self.assertEqual(self.state()[0], "add")
+        # a second route, cancelled with Esc, leaves nothing behind
+        app.on_press(Click(300, 200, time=9000))
+        app.on_press(Click(320, 220, time=11000))
         app.on_key(Key("Escape"))
-        self.assertEqual(self.state(), ("select", "arrow", False, False))
+        self.assertIsNone(app.sketch)
+        self.assertEqual(len(m.packs), packs + 1)
+        while len(m.undo_stack) > depth:
+            app.undo()
+        self.assertEqual(len(m.packs), packs)
+        app.set_tool("select")
 
-        # choosing a tool ends placing
-        app.start_place("Click on the map.", lambda x, z: None)
-        app.set_tool("pan")
-        self.assertEqual(self.state(), ("pan", "hand2", False, True))
-        app.on_key(Key("Escape"))
-
-        # placing an item from the Objects pane ends a terrain tool
-        spawn = next(i for i, k in app.obj_templates.items() if k[0] == "spawn")
-        app.set_tool("texture")
-        app.place_item(spawn, app.view.cx, app.view.cz)
-        self.assertEqual(self.state(), ("select", "arrow", False, False))
-        app.undo()
-
-        # a right-click on the map ends a terrain tool instead of opening the menu
-        app.set_tool("flatten")
-        app.context_menu(Click(50, 50, 3))
-        self.assertEqual(self.state(), ("select", "arrow", False, False))
+    def test_messages_use_the_message_bar(self):
+        app = self.app
+        app.status("Test warning", "warn", banner=True)
+        self.root.update()
+        self.assertTrue(app.msg_bar.place_info())
+        self.assertEqual(app.msg_lbl.cget("text"), "Test warning")
+        app.hide_message()
+        self.assertFalse(app.msg_bar.place_info())
 
 
 if __name__ == "__main__":
