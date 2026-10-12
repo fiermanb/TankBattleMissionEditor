@@ -75,10 +75,12 @@ this editor, in any game version.
 
 ## Limitations
 
-- Only existing objects and tank types.
+- Only the game's existing objects, tank types and terrains. New scenarios
+  start from one of the game's terrains; its size is fixed.
 - Terrain editing and the AI route map rebuild work on custom scenarios only.
-- AI tanks follow changed terrain and added objects only after Scenario >
-  Rebuild AI route map.
+- AI tanks follow changed terrain and added, moved or removed objects only
+  after Scenario > Rebuild AI route map. The rebuilt route map is close to the
+  game's own; in dense city and mountain areas AI routes can differ.
 - After a game update, objects whose scripts changed cannot be edited until a
   new version of the editor is released.
 
