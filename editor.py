@@ -949,9 +949,62 @@ class EditorApp:
             return
         self.status("Starting the game. Close it before saving in the editor again.", "ok")
 
-    def rebuild_navmesh(self):
+    def auto_rebuild_navmesh(self):
+        """Before saving a custom scenario: rebuild the AI route map when the
+        terrain or the solid objects changed since it was opened (or last
+        rebuilt). Returns a note for the status bar, or ''."""
+        old = getattr(self, "_nav_sig", None)
+        if old is None:
+            return ""
+        new = self.navmesh_signature()
+        if new is None or new == old:
+            return ""
+        self.busy("Terrain or objects changed: rebuilding the AI route map...")
+        try:
+            self.rebuild_navmesh_now()
+        except Exception as e:
+            return f"The AI route map could not be rebuilt ({e}); use Scenario > Rebuild AI route map."
+        return "AI route map rebuilt for the changed terrain and objects."
+
+    def navmesh_signature(self):
+        """Fingerprint of the AI route map's inputs of the open custom scenario,
+        or None (not a custom scenario, or no route map)."""
+        m = self.model
+        if not m or m.index not in self.custom_titles:
+            return None
+        try:
+            return NavMesh(m).inputs_signature()
+        except Exception:
+            return None
+
+    def rebuild_navmesh_now(self):
         """Rebuild the AI route map of the open custom scenario from its current
-        terrain and objects."""
+        terrain and objects (as one edit). Returns (areas, tiles); raises on
+        failure."""
+        m = self.model
+        nav = NavMesh(m)
+        source = None if nav.owned else (nav.file, nav.pid)
+        tiles, _ = nav.build()
+        m.begin("Rebuild AI route map")
+        try:
+            nav.write(tiles)
+        finally:
+            m.commit()
+        if source:
+            entry = next((x for x in self.scenarios.custom if x["battle_index"] == m.index), None)
+            for x in self.scenarios.manifest["scenarios"]:
+                if entry and x["scene_id"] == entry["scene_id"]:
+                    x["navmesh_source"] = {"file": source[0], "pid": source[1],
+                                           "desc": self.backups.index.describe(*source)}
+            self.scenarios._save_manifest()
+        self._nav_sig = nav.inputs_signature()
+        self._navmesh_view = (None, None)
+        self.layers_changed()
+        return sum(len(t["polys"]) for t in tiles), len(tiles)
+
+    def rebuild_navmesh(self):
+        """Scenario > Rebuild AI route map. Saving also rebuilds it by itself when
+        the terrain or the solid objects changed."""
         m = self.model
         if not m:
             return
@@ -960,30 +1013,16 @@ class EditorApp:
             return
         self.busy("Rebuilding the AI route map...")
         try:
-            nav = NavMesh(m)
-            source = None if nav.owned else (nav.file, nav.pid)
-            tiles, _ = nav.build()
-
-            def do():
-                nav.write(tiles)
-            self.op("Rebuild AI route map", do)
+            polys, ntiles = self.rebuild_navmesh_now()
         except Exception as e:
             self.idle()
             self.status(f"Rebuilding the AI route map failed: {e}", "warn", banner=True)
             return
         self.idle()
-        if source:
-            entry = next((x for x in self.scenarios.custom if x["battle_index"] == m.index), None)
-            for x in self.scenarios.manifest["scenarios"]:
-                if entry and x["scene_id"] == entry["scene_id"]:
-                    x["navmesh_source"] = {"file": source[0], "pid": source[1],
-                                           "desc": self.backups.index.describe(*source)}
-            self.scenarios._save_manifest()
-        self._navmesh_view = (None, None)
-        self.layers_changed()
-        polys = sum(len(t["polys"]) for t in tiles)
-        self.status(f"AI route map rebuilt: {polys} areas in {len(tiles)} tiles. Save to keep it "
-                    "(Table Of Contents > Terrain > AI route map shows it).", "ok", banner=True)
+        self.update_title()
+        self.status(f"AI route map rebuilt: {polys} areas in {ntiles} tiles. Save to keep it "
+                    "(Table Of Contents > Terrain > AI route map shows it). Saving also rebuilds it by itself "
+                    "when terrain or objects changed.", "ok", banner=True)
 
     def navmesh_polygons(self):
         """[(world (x, z) points, area code)] of the open scene's route map."""
@@ -1223,8 +1262,9 @@ class EditorApp:
             "tanks are destroyed, or when tanks enter a trigger area; it can enable or cancel other events. "
             "Trigger areas: set their size and the tanks that count in Properties.\n"
             "Terrain (custom scenarios): Texture, Raise, Lower, Flatten and Smooth; drag on the map. The "
-            "Terrain tab holds the ground layers and the brush options. Scenario > Rebuild AI route map makes "
-            "the AI drive around the scenario's own terrain and objects.\n\n"
+            "Terrain tab holds the ground layers and the brush options. Saving rebuilds the AI route map "
+            "when terrain or objects changed, so AI tanks drive around them (also Scenario > Rebuild AI route "
+            "map).\n\n"
             "Table Of Contents: a check box shows or hides a layer; double-click opens its table; right-click "
             "selects, zooms or shows only that layer.\n"
             "Tables: double-click a cell (or F2 for the name) to edit it; Enter applies, Esc cancels. Insert "
@@ -2825,6 +2865,7 @@ class EditorApp:
             self.status(f"Failed to load level{index}: {e}", "warn", banner=True)
             return
         self.selected = None
+        self._nav_sig = self.navmesh_signature()
         self._terrain_img = None
         self._terrain_rev += 1
         if self.model.terrain is not None:
@@ -2891,6 +2932,7 @@ class EditorApp:
                 self.op("Connect message texts", m.repair_event_texts)
             if m.count_mismatches():
                 self.op("Correct event list counts", m.repair_counts)
+            nav_note = self.auto_rebuild_navmesh()
             m.save()
         except PermissionError:
             self.idle()
@@ -2903,6 +2945,8 @@ class EditorApp:
         self.idle()
         self.update_title()
         msg = f"Saved level{m.index} - {self.custom_titles.get(m.index, m.label)}. Original kept in backups/."
+        if nav_note:
+            msg += " " + nav_note
         if m.index in self.custom_titles:
             lines = self.run_briefing_sync()
             if lines:

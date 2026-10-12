@@ -122,6 +122,70 @@ class NavMeshTest(unittest.TestCase):
         self.assertTrue(covered(nav3.tiles(), hx, hz))
         self.assertTrue(TerrainPaint(m3).owned)
 
+    def test_signature_follows_terrain_and_objects_only(self):
+        ctx = GameContext(GAME)
+        m = SceneModel(ctx, 18)
+        nav = NavMesh(m)
+        base = nav.inputs_signature()
+        spawn = m.event_go[m.spawns[0]]
+        m.begin("move tank")
+        p = m.world(m.tr_of_go[spawn])[0]
+        m.move_to(m.tr_of_go[spawn], p[0] + 30.0, p[2])
+        m.commit()
+        self.assertEqual(nav.inputs_signature(), base, "moving a tank does not change the route map's inputs")
+        house = next(g for g in {m.object_root(x) for x in m.foot}
+                     if m.name(g).startswith("SM_Bld_City_Preset") and m.active(g))
+        m.begin("move house")
+        p = m.world(m.tr_of_go[house])[0]
+        m.move_to(m.tr_of_go[house], p[0] + 15.0, p[2])
+        m.commit()
+        self.assertNotEqual(nav.inputs_signature(), base, "moving a building does")
+        m.undo()
+        m.undo()
+        self.assertEqual(nav.inputs_signature(), base)
+
+
+@unittest.skipUnless(os.path.isdir(GAME), "game not installed")
+class AutoRebuildTest(unittest.TestCase):
+    """Saving a custom scenario rebuilds the AI route map when terrain or
+    solid objects changed, and only then."""
+
+    def test_save_rebuilds_when_needed(self):
+        import tkinter as tk
+        import editor
+        tmp = tempfile.mkdtemp(dir=os.path.dirname(GAME))
+        self.addCleanup(remove_tree, tmp)
+        game = os.path.join(tmp, "game")
+        os.makedirs(game)
+        mirror_game(game)
+        ctx = GameContext(game)
+        import settings
+        self.addCleanup(lambda: remove_tree(settings.backup_dir_for(game)))
+        mgr = ScenarioManager(ctx, settings.backup_dir_for(game))
+        src = next(p for p, d in mgr.missions() if d["Battle_Scene_Name"] == URBAN)
+        _, idx = mgr.create(src, "Auto Rebuild", "x")
+        root = tk.Tk()
+        root.withdraw()
+        self.addCleanup(root.destroy)
+        app = editor.EditorApp(root, game, idx, auto_library=False)
+        root.update()
+        m = app.model
+        self.assertFalse(NavMesh(m).owned)
+
+        spawn = m.event_go[m.spawns[0]]
+        p = m.world(m.tr_of_go[spawn])[0]
+        app.op("Move", m.move_to, m.tr_of_go[spawn], p[0] + 20.0, p[2])
+        self.assertTrue(app.save())
+        self.assertFalse(NavMesh(app.model).owned, "a moved tank does not rebuild the route map")
+
+        house = next(g for g in {m.object_root(x) for x in m.foot}
+                     if m.name(g).startswith("SM_Bld_City_Preset") and m.active(g))
+        app.op("Delete", m.delete, house)
+        self.assertTrue(app.save())
+        self.assertIn("AI route map rebuilt", app.status_lbl.cget("text"))
+        m2 = SceneModel(ctx, idx)
+        self.assertTrue(NavMesh(m2).owned, "a removed building rebuilds the route map on save")
+
 
 if __name__ == "__main__":
     unittest.main()

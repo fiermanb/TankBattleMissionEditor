@@ -27,7 +27,7 @@ changes.
 - Events with timers, destroyed tanks or trigger areas, for example waves.
 - New scenarios from a mission or on an empty terrain.
 - Terrain painting and height brushes for custom scenarios.
-- Rebuild the AI route map of custom scenarios.
+- AI tanks of custom scenarios drive around changed terrain and objects.
 - Back up, export and import scenarios.
 
 ## Tools and controls
@@ -79,9 +79,9 @@ this editor, in any game version.
 - Every map uses one of the game's terrains. A custom scenario can repaint and
   reshape it, but cannot change its size.
 - Terrain editing and the AI route map rebuild work on custom scenarios only.
-- AI tanks follow changed terrain and added, moved or removed objects only
-  after Scenario > Rebuild AI route map. The rebuilt route map is close to the
-  game's own; in dense city and mountain areas AI routes can differ.
+- Saving a custom scenario rebuilds its AI route map when terrain or objects
+  changed. The rebuilt map is close to the game's own; in dense city and
+  mountain areas AI routes can differ.
 - After a game update, objects whose scripts changed cannot be edited until a
   new version of the editor is released.
 

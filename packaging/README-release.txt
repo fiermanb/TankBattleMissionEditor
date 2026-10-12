@@ -33,8 +33,8 @@ WHAT IT DOES
   or smooth the ground of a custom scenario (it gets its own copy of the
   terrain; the original missions keep theirs). Brush options are on the
   Terrain tab; elevation tint and contour lines in the Table Of Contents.
-  Scenario > Rebuild AI route map makes the AI drive around the scenario's
-  own terrain and objects.
+  Saving rebuilds the AI route map when terrain or objects changed, so AI
+  tanks drive around them.
 - F5 starts the game.
 - Tables of spawns, events, waypoints and scenery: double-click a cell to
   edit it.
@@ -69,9 +69,10 @@ game and this editor, in any game version.
 
 LIMITATIONS
 -----------
-Only existing objects and tank types. AI tanks route around added buildings
-only after Scenario > Rebuild AI route map (custom scenarios). If a virus
-scanner blocks the program, check it with your scanner and allow it.
+Only existing objects and tank types. Terrain editing and the AI route map
+rebuild work on custom scenarios only; the rebuilt map is close to the game's
+own. If a virus scanner blocks the program, check it with your scanner and
+allow it.
 
 LICENCE
 -------

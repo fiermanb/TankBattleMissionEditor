@@ -35,6 +35,7 @@ scenario's own sharedassetsN.assets, like a painted terrain.
 """
 
 import copy
+import hashlib
 import json
 import math
 import os
@@ -267,6 +268,22 @@ class NavMesh:
                                     for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)])
                 out.append((g, convex_hull(corners[:, [0, 2]]), float(corners[:, 1].max())))
         return out
+
+    def inputs_signature(self):
+        """Fingerprint of what the route map is built from: the terrain heights
+        and holes and the outlines of the solid objects. Moving tanks,
+        waypoints or events does not change it."""
+        m = self.model
+        h = hashlib.sha1()
+        t = m.terrain
+        if t is not None:
+            h.update(np.ascontiguousarray(t.heights).tobytes())
+            if len(t.holes):
+                h.update(np.ascontiguousarray(t.holes).tobytes())
+        for g, outline, top in sorted(self.colliders(), key=lambda c: c[0]):
+            h.update(np.round(np.asarray(outline, dtype=float), 2).tobytes())
+            h.update(struct.pack("<qd", g, round(top, 2)))
+        return h.hexdigest()
 
     def ground(self, types=None):
         """(walk, area, surface) grids on the 0.5 m grid over the terrain:
