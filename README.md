@@ -75,8 +75,9 @@ this editor, in any game version.
 
 ## Limitations
 
-- Only the game's existing objects, tank types and terrains. New scenarios
-  start from one of the game's terrains; its size is fixed.
+- Only the game's existing objects and tank types.
+- Every map uses one of the game's terrains. A custom scenario can repaint and
+  reshape it, but cannot change its size.
 - Terrain editing and the AI route map rebuild work on custom scenarios only.
 - AI tanks follow changed terrain and added, moved or removed objects only
   after Scenario > Rebuild AI route map. The rebuilt route map is close to the
