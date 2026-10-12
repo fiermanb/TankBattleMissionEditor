@@ -32,8 +32,8 @@ changes.
 
 ## Tools and controls
 
-One map tool is active at a time, as in GIS software. It stays active until you
-choose another tool. Its toolbar button stays pressed, and the status bar shows
+One map tool is active at a time. It stays active until you choose another
+tool. Its toolbar button stays pressed, and the status bar shows
 its instructions. Esc, right-click > Stop, or a second click on the pressed
 button returns to Select / move.
 
@@ -79,6 +79,8 @@ this editor, in any game version.
 - Terrain editing and the AI route map rebuild work on custom scenarios only.
 - AI tanks follow changed terrain and added objects only after Scenario >
   Rebuild AI route map.
+- After a game update, objects whose scripts changed cannot be edited until a
+  new version of the editor is released.
 
 ## Build
 
@@ -88,25 +90,6 @@ Requires Python 3.11+ on Windows.
     python editor.py                      # run from source
     python -m unittest discover tests     # tests (need the installed game)
     python packaging/build_exe.py         # standalone executable + release zip
-
-The source version keeps its settings and backups in the folder named in
-`data_location.txt` next to `editor.py` (not in git), else in
-`%LOCALAPPDATA%\TankBattleMissionEditor`. Name the folder of the executable
-there to share its scenarios.
-
-`.github/workflows/release.yml` builds the release on GitHub when a version tag
-is pushed. Code signing through the SignPath Foundation is planned.
-
-## Maintenance
-
-The editor ships the field layouts of the game's scripts. After a game update,
-regenerate them and release a new version:
-
-    pip install TypeTreeGeneratorAPI==0.0.10
-    python packaging/generate_layouts.py  # writes layouts/tbc_layouts.json.gz
-
-Until a new version is released, the editor does not edit objects whose scripts
-changed in the update.
 
 ## Licence
 
