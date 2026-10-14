@@ -735,6 +735,24 @@ def outline_polygon(pts, r):
     return [float(q) for pt in left + right[::-1] for q in pt]
 
 
+class RemoveScenarioDialog(Dialog):
+    """Confirm removing one scenario; run() returns keep-backup (bool) or None."""
+
+    def __init__(self, parent, title, others):
+        super().__init__(parent, "Remove scenario")
+        text = f"Remove '{title}' from the game?"
+        if others:
+            text += (f"\n\nThe game numbers its scenes, so all custom scenarios are removed and the other "
+                     f"{others} restored from their backups. This can take a minute or two.")
+        tk.Label(self.body, text=text, anchor="w", justify="left", wraplength=420).pack(fill="x")
+        self.keep = tk.BooleanVar(value=False)
+        ttk.Checkbutton(self.body, variable=self.keep, text="Keep its backup (Scenario > Restore scenarios "
+                        "from backup brings it back)").pack(anchor="w", pady=(8, 0))
+
+    def collect(self):
+        return self.keep.get()
+
+
 class NameDialog(Dialog):
     """Ask for a name."""
 
@@ -1301,7 +1319,8 @@ class EditorApp:
                           ("Restore scenarios from backup...", lambda: self.restore_backups()),
                           ("Export scenario...", self.export_scenario),
                           ("Import scenario...", self.import_scenario), None,
-                          ("Remove custom scenarios...", self.remove_custom)])
+                          ("Remove scenario...", lambda: self.remove_scenario()),
+                          ("Remove all custom scenarios...", self.remove_custom)])
         menu("Windows", [("Table Of Contents", lambda: self.show_page("left", "toc"), "", "toc"),
                          ("Objects", lambda: self.show_page("left", "objects"), "", "objects"),
                          ("Properties", lambda: self.show_page("right", "props"), "", "props"),
@@ -3160,6 +3179,7 @@ class EditorApp:
         self.catalog.pack(side="left", fill="both", expand=True)
         self.catalog.bind("<Double-Button-1>", self.on_catalog_open)
         self.catalog.bind("<Return>", self.on_catalog_open)
+        self.catalog.bind("<Button-3>", self.catalog_menu)
 
     def fill_catalog(self):
         c = self.catalog
@@ -3174,6 +3194,41 @@ class EditorApp:
         if self.model and c.exists(f"s{self.model.index}"):
             c.selection_set(f"s{self.model.index}")
             c.see(f"s{self.model.index}")
+
+    def catalog_actions(self, iid):
+        """(label, command, enabled) of the Catalog's right-click menu for item iid."""
+        if not iid.startswith("s"):
+            return []
+        idx = int(iid[1:])
+        is_open = bool(self.model and self.model.index == idx)
+        actions = [("Open", self.on_catalog_open, not is_open)]
+        entry = next((s for s in (self.scenarios.custom if self.scenarios else []) if s["battle_index"] == idx),
+                     None)
+        if entry is not None:
+            actions.append(("Remove scenario...", lambda: self.remove_scenario(entry), True))
+        return actions
+
+    def catalog_menu(self, e):
+        """Right-click on the Catalog: Open, and Remove scenario for a custom
+        scenario."""
+        iid = self.catalog.identify_row(e.y)
+        if not iid:
+            return
+        self.catalog.selection_set(iid)
+        self.catalog.focus(iid)
+        actions = self.catalog_actions(iid)
+        if not actions:
+            return
+        menu = tk.Menu(self.root, tearoff=0)
+        for i, (label, cmd, enabled) in enumerate(actions):
+            if i == 1:
+                menu.add_separator()
+            menu.add_command(label=label, command=cmd, state="normal" if enabled else "disabled",
+                             font=UI_BOLD if i == 0 else None)
+        try:
+            menu.tk_popup(e.x_root, e.y_root)
+        finally:
+            menu.grab_release()
 
     def on_catalog_open(self, _e=None):
         sel = self.catalog.selection()
@@ -3708,6 +3763,65 @@ class EditorApp:
             self.backup_scenario(self.model.index)
         self.status(f"Mission text saved: '{title}'.", "ok", banner=True)
 
+    def close_scene(self):
+        """Close the open mission (its scene is about to disappear)."""
+        self.model = None
+        self.selected = None
+        self.sel = []
+        self.canvas.delete("overlay")
+        self.canvas.itemconfig(self._base_item, image="")
+        self._base_key = None
+        self.refresh_props()
+        self.refresh_tables()
+        self.update_title()
+
+    def remove_scenario(self, entry=None):
+        """Remove one custom scenario from the game (the others stay). entry:
+        its scenario list entry; None asks which."""
+        if not self.ctx or not self.game_closed("remove a scenario"):
+            return
+        custom = self.scenarios.custom
+        if not custom:
+            self.status("There are no custom scenarios to remove.", banner=True)
+            return
+        if entry is None:
+            entry = ListDialog(self.root, "Remove scenario",
+                               [(f"{s['title']}  (level{s['battle_index']})", s) for s in custom],
+                               prompt="Choose the scenario to remove from the game.").run()
+            if not entry:
+                return
+        keep = RemoveScenarioDialog(self.root, entry["title"], len(custom) - 1).run()
+        if keep is None or not self.guard_unsaved():
+            return
+        open_id = None
+        if self.model:
+            cur = next((s for s in custom if s["battle_index"] == self.model.index), None)
+            open_id = cur["scene_id"] if cur else None
+        self.busy(f"Removing '{entry['title']}' and restoring the other scenarios...")
+        try:
+            done, lines = self.backups.remove_one(entry["scene_id"], keep_backup=keep)
+        except PermissionError:
+            self.idle()
+            self.status("Removing failed: a game file is locked. Close the game and try again.", "warn", banner=True)
+            return
+        except Exception as e:
+            self.idle()
+            self.status(f"Removing failed: {e}", "warn", banner=True)
+            return
+        self.idle()
+        if open_id is not None:
+            self.close_scene()
+        self.refresh_scenes()
+        reopen = next((s for s in self.scenarios.custom if s["scene_id"] == open_id), None)
+        if reopen is not None:
+            self.open_scene(reopen["battle_index"])
+        msg = f"Removed '{entry['title']}'."
+        if keep:
+            msg += " Its backup is kept (Scenario > Restore scenarios from backup)."
+        if lines:
+            messagebox.showinfo("Remove scenario", msg + "\n\n" + "\n".join(lines), parent=self.root)
+        self.status(msg, "warn" if lines else "ok", banner=True)
+
     def remove_custom(self):
         if self.ctx and not self.game_closed("remove scenarios"):
             return
@@ -3726,7 +3840,7 @@ class EditorApp:
             text += "\n\nRemoved: " + ", ".join(s["title"] for s in removed)
         if kept:
             text += "\n\nKept: " + ", ".join(s["title"] for s in kept) + " (" + other_copy + ")."
-        if not messagebox.askyesno("Remove custom scenarios", text, parent=self.root):
+        if not messagebox.askyesno("Remove all custom scenarios", text, parent=self.root):
             return
         if not self.guard_unsaved():
             return
@@ -3744,13 +3858,7 @@ class EditorApp:
             return
         self.idle()
         if self.model and base is not None and self.model.index >= base:
-            self.model = None
-            self.selected = None
-            self.canvas.delete("overlay")
-            self.canvas.itemconfig(self._base_item, image="")
-            self._base_key = None
-            self.refresh_props()
-            self.refresh_tables()
+            self.close_scene()
         self.refresh_scenes()
         self.update_title()
         self.status(f"Removed {n} custom scenario(s) and restored the mission files. Their backups are kept: "

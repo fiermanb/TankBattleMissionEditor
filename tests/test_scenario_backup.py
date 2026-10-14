@@ -154,6 +154,50 @@ class CustomSourceTest(unittest.TestCase):
 
 
 @unittest.skipUnless(os.path.isdir(GAME), "game not installed")
+class RemoveOneTest(unittest.TestCase):
+    def test_one_scenario_goes_the_others_stay(self):
+        tmp = tempfile.mkdtemp(dir=os.path.dirname(GAME))
+        self.addCleanup(remove_tree, tmp)
+        game = os.path.join(tmp, "game")
+        os.makedirs(game)
+        mirror_game(game)
+        ctx = GameContext(game)
+        mgr = ScenarioManager(ctx, os.path.join(tmp, "backups"))
+        src = next(p for p, d in mgr.missions() if d["Battle_Scene_Name"] == "10_Urban_Area_Close_Combat_Basic")
+        for title in ("First", "Second", "Third"):
+            mgr.create(src, title, f"{title} briefing.")
+        third = next(s for s in mgr.custom if s["title"] == "Third")
+        m = SceneModel(ctx, third["battle_index"], terrain=None)
+        hostile = next(e for e in m.spawns if m.sc.read(e)["Relationship"] == 1)
+        go = m.event_go[hostile]
+        m.begin("move")
+        m.move_to(m.tr_of_go[go], 12.0, 34.0, follow_terrain=False)
+        m.commit()
+        m.save()
+        original = next(d for _, d in mgr.missions() if mgr.is_original(d))
+        mgr.set_mission_text(original["Battle_Scene_Name"], title="Renamed original")
+
+        backups = ScenarioBackups(ctx, mgr)
+        second = next(s for s in mgr.custom if s["title"] == "Second")
+        done, report = backups.remove_one(second["scene_id"])
+        self.assertEqual(done, ["First", "Third"])
+        self.assertEqual([s["title"] for s in mgr.custom], ["First", "Third"], report)
+        self.assertFalse(os.path.isdir(backups.folder(second["scene_id"])), "its backup is deleted")
+        third = next(s for s in mgr.custom if s["title"] == "Third")
+        m = SceneModel(ctx, third["battle_index"], terrain=None)
+        moved = next(e for e in m.spawns if m.name(m.event_go[e]) == m.name(go)
+                     and abs(m.world(m.tr_of_go[m.event_go[e]])[0][0] - 12.0) < 1e-3)
+        self.assertAlmostEqual(m.world(m.tr_of_go[m.event_go[moved]])[0][2], 34.0, places=3)
+        self.assertEqual(mgr.mission_for_scene(original["Battle_Scene_Name"])[1]["Scene_Title"],
+                         "Renamed original", "changes to the original missions stay")
+
+        first = next(s for s in mgr.custom if s["title"] == "First")
+        backups.remove_one(first["scene_id"], keep_backup=True)
+        self.assertEqual([s["title"] for s in mgr.custom], ["Third"])
+        self.assertIn("First", [b["title"] for b in backups.missing()], "a kept backup can be restored")
+
+
+@unittest.skipUnless(os.path.isdir(GAME), "game not installed")
 class ScenarioExchangeTest(unittest.TestCase):
     def test_export_import(self):
         tmp = tempfile.mkdtemp(dir=os.path.dirname(GAME))

@@ -55,7 +55,8 @@ Help > Controls lists all shortcuts.
 ## Backups
 
 The first save of a level keeps the original (File > Restore original).
-Scenario > Remove custom scenarios undoes all scenarios. Steam's "Verify
+Scenario > Remove scenario (or right-click it in the Catalog) removes one
+scenario; Scenario > Remove all custom scenarios undoes all. Steam's "Verify
 integrity of game files" also restores everything.
 
 Backups and settings are kept next to the program, in `backups\` and

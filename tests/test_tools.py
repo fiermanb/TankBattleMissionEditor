@@ -194,6 +194,21 @@ class ToolTest(unittest.TestCase):
         self.assertAlmostEqual(m.ground(x, z), g0, places=3, msg="undo restores the ground")
         app.set_tool("select")
 
+    def test_catalog_menu(self):
+        app = self.app
+        actions = {label: enabled for label, _, enabled in app.catalog_actions(f"s{SCENE}")}
+        self.assertEqual(actions, {"Open": False}, "the open mission; an original cannot be removed")
+        self.assertEqual(app.catalog_actions("orig"), [])
+        custom = app.scenarios.custom
+        if custom:
+            labels = [label for label, _, _ in app.catalog_actions(f"s{custom[0]['battle_index']}")]
+            self.assertEqual(labels, ["Open", "Remove scenario..."])
+        dlg = editor.RemoveScenarioDialog(self.root, "Some scenario", 2)
+        self.assertFalse(dlg.collect(), "the backup is deleted unless chosen")
+        dlg.keep.set(True)
+        self.assertTrue(dlg.collect())
+        dlg.destroy()
+
     def test_trigger_area_size_fields(self):
         app = self.app
         m = app.model

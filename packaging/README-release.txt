@@ -61,7 +61,8 @@ Help > Controls lists all shortcuts.
 BACKUPS
 -------
 The first save of a level keeps the original (File > Restore original).
-Scenario > Remove custom scenarios undoes all scenarios. Backups and settings
+Scenario > Remove scenario (or right-click it in the Catalog) removes one
+scenario; Scenario > Remove all custom scenarios undoes all. Backups and settings
 are kept next to the program, in the backups folder and settings.json
 (Help > Open backup folder). If the program's folder cannot be written, they
 are kept in %LOCALAPPDATA%\TankBattleMissionEditor. Steam's "Verify integrity

@@ -24,7 +24,23 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from scene_io import GameContext, SceneFile  # noqa: E402
 from scene_model import SceneModel  # noqa: E402
-from scenarios import SHARED_FILES, ScenarioManager  # noqa: E402
+from scenarios import ROWS_PER_PAGE, SHARED_FILES, ScenarioManager  # noqa: E402
+
+
+def custom_room(mgr, sel):
+    """True when a custom page of the mission select scene `sel` has room for
+    another scenario (the copied game may already hold scenarios)."""
+    lists = next(sel.sc.read(p) for p in sel.mb if sel.script_class(p) == "Mission_Select_Manager_CS")
+    pages = mgr._custom_pages(sel, [r["m_PathID"] for r in lists["missionLists"]])
+    return any(sum(1 for r in mgr._rows(sel, g) if sel.go[r]["m_IsActive"]) < ROWS_PER_PAGE for g in pages)
+
+
+def custom_pages_needed(mgr, sel):
+    """(custom pages, pages needed for their active rows) of `sel`."""
+    lists = next(sel.sc.read(p) for p in sel.mb if sel.script_class(p) == "Mission_Select_Manager_CS")
+    pages = mgr._custom_pages(sel, [r["m_PathID"] for r in lists["missionLists"]])
+    rows = sum(1 for g in pages for r in mgr._rows(sel, g) if sel.go[r]["m_IsActive"])
+    return len(pages), max(1, -(-rows // ROWS_PER_PAGE))
 
 from gamepath import GAME  # noqa: E402
 
@@ -77,8 +93,8 @@ class ScenarioTest(unittest.TestCase):
             sel0 = SceneModel(ctx, 2)
             lists0 = sel0.sc.read(next(p for p in sel0.mb if sel0.script_class(p) == "Mission_Select_Manager_CS"))["missionLists"]
             pages0 = len(lists0)
-            has_custom_page = any(sel0.name(r["m_PathID"]) == "Mission_List (Custom)" for r in lists0)
             mgr = ScenarioManager(ctx, os.path.join(tmp, "backups"))
+            has_custom_page = custom_room(mgr, sel0)
             src_pid = next(p for p, d in mgr.missions() if d["Battle_Scene_Name"] == "10_Urban_Area_Close_Combat_Basic")
 
             menu_idx, battle_idx = mgr.create(src_pid, "My First Battle", "Destroy everything.")
@@ -111,11 +127,13 @@ class ScenarioTest(unittest.TestCase):
             battle = SceneModel(ctx, battle_idx)
             self.assertTrue(battle.spawns)
 
+            room = custom_room(mgr, sel)
             mgr.create(src_pid, "My First Battle", "Second one.")
             self.assertEqual(len(ctx.scene_names), base + 4)
             sel = SceneModel(ctx, 2)
             pages2 = sel.sc.read(next(p for p in sel.mb if sel.script_class(p) == "Mission_Select_Manager_CS"))["missionLists"]
-            self.assertEqual(len(pages2), len(pages), "second scenario goes on the same custom page")
+            self.assertEqual(len(pages2), len(pages) + (0 if room else 1),
+                             "second scenario goes on the same custom page while it has room")
 
             mgr.set_mission_text("90_My_First_Battle", title="Renamed", briefing="New text")
             self.assertEqual(mgr.mission_for_scene("90_My_First_Battle")[1]["Scene_Title"], "Renamed")
@@ -191,8 +209,8 @@ class TwoEditorCopiesTest(unittest.TestCase):
         b.create(src, "Beta", "made by copy B")
 
         select = SceneModel(ctx, 2, terrain=None)
-        self.assertEqual(sum(1 for g in select.go if select.name(g) == "Mission_List (Custom)"
-                             and select.go[g]["m_IsActive"]), 1, "both copies use one custom page")
+        have, needed = custom_pages_needed(a, select)
+        self.assertEqual(have, needed, "both copies share the custom pages")
         self.assertEqual(a.consolidate_pages(), 0)
         self.assertEqual(a.adopt_unknown(), ["Beta"])
         self.assertEqual(b.adopt_unknown(), ["Alpha"])

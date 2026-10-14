@@ -669,6 +669,48 @@ class ScenarioBackups:
         self.scenarios._save_manifest()
         return []
 
+    def remove_one(self, scene_id, keep_backup=False):
+        """Remove one custom scenario from the game. The game identifies scenes
+        by their position in its scene list, so one scenario cannot be taken out
+        of the middle: every scenario is backed up, all are removed, and all
+        others are restored from their backups. Changes to the original
+        missions' settings (mission text) are kept. keep_backup: keep the
+        removed scenario's backup (Restore scenarios from backup brings it
+        back). Returns (titles restored, report lines)."""
+        sm = self.scenarios
+        target = next((s for s in sm.custom if s["scene_id"] == scene_id), None)
+        if target is None:
+            raise ValueError("this scenario is not in the game")
+        removable, kept = sm.removable()
+        if not any(s["scene_id"] == scene_id for s in removable):
+            raise ValueError("this scenario was made by another copy of the editor (the installed program or "
+                             "the source version); remove it with that copy")
+        others = sorted((s for s in removable if s["scene_id"] != scene_id), key=lambda s: s["battle_index"])
+        for s in sm.custom:
+            self.backup(s)
+        originals = {d["Scene_ID"]: dict(d) for _, d in sm.missions() if sm.is_original(d)}
+        sm.remove_all()
+        report = []
+        for _, d in sm.missions():
+            old = originals.get(d["Scene_ID"])
+            if old is None:
+                continue
+            diff = {k: v for k, v in old.items() if k not in ("m_GameObject", "m_Script") and d.get(k) != v}
+            if diff:
+                sm.set_mission_fields(d["Battle_Scene_Name"], **diff)
+        done = []
+        for s in others:
+            try:
+                _, _, lines = self.restore(s["scene_id"])
+                done.append(s["title"])
+                report += [f"{s['title']}: {r}" for r in lines if not r.startswith("Briefing updated")]
+            except Exception as e:
+                report.append(f"{s['title']}: not restored ({e}); Scenario > Restore scenarios from backup "
+                              "tries again.")
+        if not keep_backup:
+            self.delete(scene_id)
+        return done, report
+
     def restore(self, folder_name, force=False):
         """Recreate a backed-up scenario in the installed game. Returns
         (menu index, battle index, report lines)."""
