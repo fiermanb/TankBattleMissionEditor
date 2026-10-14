@@ -1328,7 +1328,8 @@ class EditorApp:
                          ("Spawns table", lambda: self.show_page("bottom", "spawns"), "", "table"),
                          ("Events table", lambda: self.show_page("bottom", "events"), "", "events"),
                          ("Waypoints table", lambda: self.show_page("bottom", "waypoints"), "", "addwp"),
-                         ("Scenery table", lambda: self.show_page("bottom", "scenery"), "", "objects")])
+                         ("Scenery table", lambda: self.show_page("bottom", "scenery"), "", "objects"),
+                         ("Terrain features table", lambda: self.show_page("bottom", "features"), "", "tvertex")])
         menu("Help", [("Controls", self.show_controls), ("Open backup folder", self.open_backup_folder),
                       ("About", self.show_about)])
 
@@ -1443,6 +1444,8 @@ class EditorApp:
                          "waypoints")
         self.build_table(self.docks["bottom"].add_page("scenery", "Table - Scenery", self.image("objects")),
                          "scenery")
+        self.build_table(self.docks["bottom"].add_page("features", "Table - Terrain features",
+                                                       self.image("tvertex")), "features")
         self.docks["bottom"].on_select = lambda key: self.refresh_tables()
 
         self.docks["right"] = DockArea(self.hpane, lambda: self.hide_dock("right"))
@@ -1662,7 +1665,8 @@ class EditorApp:
             self.toc.item(k, text=f" {text}" + (f" ({n})" if n is not None else ""))
 
     LAYER_TABLES = {"Spawns": "spawns", "Player": "spawns", "Friendly": "spawns", "Hostile": "spawns",
-                    "Waypoints": "waypoints", "Events": "events", "Scenery": "scenery", "Deleted": "spawns"}
+                    "Waypoints": "waypoints", "Events": "events", "Scenery": "scenery", "Deleted": "spawns",
+                    "Features": "features"}
 
     def open_layer_table(self, key):
         page = self.LAYER_TABLES.get(key) or ("scenery" if key in CATEGORY_COLOURS else None)
@@ -1852,22 +1856,6 @@ class EditorApp:
         ttk.Button(bar, text="Save as new brush...", command=self.save_brush_as).pack(side="left")
         self.brush_del_btn = ttk.Button(bar, text="Delete brush", command=self.delete_brush)
         self.brush_del_btn.pack(side="left", padx=(4, 0))
-        tk.Label(body, text="Features in this scenario", font=UI_BOLD, anchor="w").pack(
-            side="top", fill="x", padx=4, pady=(6, 0))
-        holder = bordered(body)
-        holder.pack(side="top", fill="both", expand=True, padx=2, pady=2)
-        self.feat_tree = ttk.Treeview(holder, columns=("size",), show="tree headings", selectmode="browse",
-                                      height=6)
-        self.feat_tree.heading("#0", text="Feature", anchor="w")
-        self.feat_tree.heading("size", text="Length", anchor="w")
-        self.feat_tree.column("#0", width=150, stretch=True)
-        self.feat_tree.column("size", width=70, stretch=False)
-        sb = ttk.Scrollbar(holder, command=self.feat_tree.yview)
-        self.feat_tree.configure(yscrollcommand=sb.set)
-        sb.pack(side="right", fill="y")
-        self.feat_tree.pack(side="left", fill="both", expand=True)
-        self.feat_tree.bind("<<TreeviewSelect>>", lambda e: self.on_feature_list_select())
-        self.feat_tree.bind("<Double-Button-1>", lambda e: self.frame_feature(self.feature_sel))
         self._feat_sync = self._brush_sync = False
         self.feature_sel = None
         self._vertex_click = None
@@ -2187,11 +2175,27 @@ class EditorApp:
     def feature_name(self, s):
         return s.get("brush") or KIND_NAMES[s["kind"]]
 
+    def feature_row(self, s):
+        """Values of a terrain feature's row in Table - Terrain features."""
+        used = KIND_PARAMS[s["kind"]]
+
+        def num(key):
+            v = s.get(key)
+            return "" if key not in used or v is None else f"{v:g}"
+        names = self.layer_names()
+        tex = s.get("texture")
+        texture = layer_label(names[tex]) if tex is not None and tex < len(names) else ""
+        n = len(s["points"])
+        return (s["id"], s.get("brush", ""), KIND_NAMES[s["kind"]], num("width"), num("height"), num("slope"),
+                num("rim"), num("crossings"), num("level"), texture, n, f"{length(s['points']):.0f}" if n > 1 else "")
+
     def refresh_feature_list(self):
-        t = self.feat_tree
+        """Fill Table - Terrain features (only when the features changed)."""
+        t = getattr(self, "tables", {}).get("features")
+        if t is None:
+            return
         f = self.features()
-        key = (id(f), tuple((s["id"], s.get("brush"), s["kind"], tuple(map(tuple, s["points"])))
-                            for s in f.strokes)) if f is not None else None
+        key = (id(f), tuple(repr(sorted(s.items())) for s in f.strokes)) if f is not None else None
         if key == getattr(self, "_feat_list_key", None) and key is not None:
             if self.feature_sel is not None and f.stroke(self.feature_sel) is None:
                 self.feature_sel = None
@@ -2201,15 +2205,17 @@ class EditorApp:
         t.delete(*t.get_children())
         if f is not None:
             for s in f.strokes:
-                size = f"{length(s['points']):.0f} m" if len(s["points"]) > 1 else "point"
-                t.insert("", "end", iid=str(s["id"]), text=f" #{s['id']} {self.feature_name(s)}", values=(size,))
+                t.insert("", "end", iid=f"f{s['id']}", values=self.feature_row(s))
         if self.feature_sel is not None and (f is None or f.stroke(self.feature_sel) is None):
             self.feature_sel = None
         self.sync_feature_list()
 
     def sync_feature_list(self):
-        t = self.feat_tree
-        want = [str(self.feature_sel)] if self.feature_sel is not None and t.exists(str(self.feature_sel)) else []
+        t = getattr(self, "tables", {}).get("features")
+        if t is None:
+            return
+        iid = f"f{self.feature_sel}"
+        want = [iid] if self.feature_sel is not None and t.exists(iid) else []
         if list(t.selection()) == want:
             return
         self._feat_sync = True
@@ -2224,8 +2230,31 @@ class EditorApp:
     def on_feature_list_select(self):
         if self._feat_sync:
             return
-        sel = self.feat_tree.selection()
-        self.select_feature(int(sel[0]) if sel else None)
+        sel = self.tables["features"].selection()
+        self.select_feature(int(sel[0][1:]) if sel else None)
+
+    def feature_cell_spec(self, sid, key):
+        """Cell editing in Table - Terrain features, as cell_spec()."""
+        f = self.features()
+        s = f.stroke(sid) if f is not None else None
+        if s is None:
+            return None
+        if key == "brush":
+            def rename(v):
+                cur = f.stroke(sid)
+                self.replace_feature(cur, dict(cur, brush=v.strip()), "Rename terrain feature")
+            return None, s.get("brush", ""), rename
+        if key == "kind":
+            return ([(KIND_NAMES[k], k) for k in KINDS], s["kind"],
+                    lambda v: self.set_feature_param(sid, "kind", v))
+        if key == "texture":
+            names = self.layer_names()
+            return ([("(none)", None)] + [(layer_label(n), i) for i, n in enumerate(names)], s.get("texture"),
+                    lambda v: self.set_feature_param(sid, "texture", v))
+        if key in ("width", "height", "slope", "rim", "crossings", "level") and key in KIND_PARAMS[s["kind"]]:
+            v = s.get(key)
+            return None, "" if v is None else f"{v:g}", lambda val, k=key: self.set_feature_param(sid, k, val)
+        return None
 
     def select_feature(self, sid):
         """Select terrain feature `sid` (None: none); objects are deselected."""
@@ -2772,6 +2801,10 @@ class EditorApp:
                       ("z", "Z", 70), ("used", "Used by", 300)],
         "scenery": [("name", "Name", 220), ("category", "Category", 120), ("x", "X", 70), ("z", "Z", 70),
                     ("heading", "Heading", 60), ("scale", "Scale", 60), ("status", "Status", 60)],
+        "features": [("no", "No.", 45), ("brush", "Brush", 110), ("kind", "Kind", 110), ("width", "Width (m)", 70),
+                     ("height", "Height (m)", 70), ("slope", "Side slope (deg)", 95), ("rim", "Rim (m)", 60),
+                     ("crossings", "AI crossings (m)", 100), ("level", "Level to (m)", 80),
+                     ("texture", "Texture", 90), ("points", "Points", 55), ("length", "Length (m)", 75)],
     }
 
     def build_table(self, body, kind):
@@ -2788,7 +2821,11 @@ class EditorApp:
         ys.pack(side="right", fill="y")
         xs.pack(side="bottom", fill="x")
         tv.pack(side="left", fill="both", expand=True)
-        tv.bind("<<TreeviewSelect>>", lambda e, t=tv: self.on_table_select(t))
+        if kind == "features":
+            tv.configure(selectmode="browse")
+            tv.bind("<<TreeviewSelect>>", lambda e: self.on_feature_list_select())
+        else:
+            tv.bind("<<TreeviewSelect>>", lambda e, t=tv: self.on_table_select(t))
         tv.bind("<Double-Button-1>", lambda e, t=tv, k=kind: self.on_table_double(t, k, e))
         tv.bind("<F2>", lambda e, t=tv, k=kind: self.edit_cell(t, k, t.focus(), None))
         if kind == "waypoints":
@@ -2806,7 +2843,10 @@ class EditorApp:
         if tv.identify_region(e.x, e.y) != "cell":
             return None
         if not self.edit_cell(tv, kind, tv.identify_row(e.y), tv.identify_column(e.x)):
-            self.frame_selection()
+            if kind == "features":
+                self.frame_feature(self.feature_sel)
+            else:
+                self.frame_selection()
         return "break"
 
     def cell_spec(self, kind, go, key):
@@ -2967,7 +3007,10 @@ class EditorApp:
         idx = int(col[1:]) - 1
         if not 0 <= idx < len(keys):
             return False
-        spec = self.cell_spec(kind, int(iid), keys[idx])
+        if kind == "features":
+            spec = self.feature_cell_spec(int(iid[1:]), keys[idx])
+        else:
+            spec = self.cell_spec(kind, int(iid), keys[idx])
         if spec is None:
             return False
         choices, current, commit = spec
@@ -3054,8 +3097,10 @@ class EditorApp:
             return
         m = self.model
         for kind, tv in self.tables.items():
-            if kind != "scenery":
+            if kind not in ("scenery", "features"):
                 tv.delete(*tv.get_children())
+        self._feat_list_key = None
+        self.refresh_feature_list()
         if not m:
             self.tables["scenery"].delete(*self.tables["scenery"].get_children())
             self._scenery_table_key = None
@@ -3150,7 +3195,9 @@ class EditorApp:
             return
         self._table_sync = True
         try:
-            for tv in self.tables.values():
+            for kind, tv in self.tables.items():
+                if kind == "features":
+                    continue
                 want = [str(g) for g in self.sel if tv.exists(str(g))]
                 if set(want) != set(tv.selection()):
                     tv.selection_set(want)

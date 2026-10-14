@@ -9,7 +9,7 @@ https://store.steampowered.com/app/5086560/Tank_Battle_Classic/
 
 ![Events and trigger areas: the Objects pane, an event with its trigger area, and the events table](docs/screenshot-events.png)
 
-![Terrain features: trenches, tank pits, craters, a road and an embankment drawn with brushes; a selected trench and its properties](docs/screenshot-terrain.png)
+![Terrain features: trenches, tank pits, craters, a road and an embankment drawn with brushes; a selected trench, its properties and the features table](docs/screenshot-terrain.png)
 
 ## Start
 
@@ -26,7 +26,8 @@ changes.
 - Events with timers, destroyed tanks or trigger areas, for example waves.
 - New scenarios from a mission or on an empty terrain, with a choice of player tanks.
 - Terrain features for custom scenarios: trenches, tank pits, roads and more,
-  drawn as lines or points with ready-made or own brushes, and editable later.
+  drawn as lines or points with ready-made or own brushes, editable on the map
+  and in their table.
 - AI tanks of custom scenarios drive around changed terrain and objects.
 - Back up, export and import scenarios.
 

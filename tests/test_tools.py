@@ -167,7 +167,21 @@ class ToolTest(unittest.TestCase):
         f = app.features()
         self.assertEqual(len(f.strokes), 1)
         self.assertAlmostEqual(m.ground(x, z) - g0, -1.6, delta=0.05, msg="the trench is cut 1.6 m deep")
-        self.assertEqual(app.feat_tree.get_children(), (str(f.strokes[0]["id"]),))
+        table = app.tables["features"]
+        self.assertEqual(table.get_children(), (f"f{f.strokes[0]['id']}",))
+        self.assertEqual(table.set(f"f{f.strokes[0]['id']}", "brush"), "Trench")
+        self.assertEqual(table.set(f"f{f.strokes[0]['id']}", "height"), "-1.6")
+        # editing a cell changes the feature (one undo step) and the ground
+        app.feature_cell_spec(f.strokes[0]["id"], "height")[2]("-1.0")
+        self.assertAlmostEqual(m.ground(x, z) - g0, -1.0, delta=0.05)
+        self.assertEqual(table.set(f"f{f.strokes[0]['id']}", "height"), "-1")
+        self.assertIsNone(app.feature_cell_spec(f.strokes[0]["id"], "level"), "not used by a cut")
+        app.undo()
+        self.assertAlmostEqual(m.ground(x, z) - g0, -1.6, delta=0.05)
+        table.selection_set(f"f{f.strokes[0]['id']}")
+        self.root.update()
+        self.assertEqual(app.feature_sel, f.strokes[0]["id"], "a table row selects the feature")
+        app.select_feature(None)
         # a second stroke over the same line does not deepen it
         app.on_press(Click(100, 150, time=7000))
         app.on_press(Click(200, 150, time=9000))
