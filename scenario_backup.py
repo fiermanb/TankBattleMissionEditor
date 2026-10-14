@@ -21,7 +21,9 @@ Each backup (backups/<installation>/scenarios/<scene id>/) holds
   - for a rebuilt AI route map only its source (meta.json "navmesh"): the
     route map is derived data and is rebuilt on restore,
   - terrain_base.npz and terrain_features.json (only for terrain features):
-    written by the editor when the scenario is saved (terrain_features.py).
+    written by the editor when the scenario is saved (terrain_features.py),
+  - for a sky of its own (dusk, night: lighting.py) only its settings
+    (meta.json "sky"); the sky is made again on restore.
 
 A backup can be exported as one .tbscenario file (a zip of these files) and
 imported in another installation: it contains no game assets, only the map and
@@ -53,6 +55,7 @@ import numpy as np
 from scene_io import SceneFile, layout_tree, script_key
 from terrain_edit import copy_terrain, own_assets_name, read_alpha, read_heights, terrain_components
 from terrain_features import BASE_FILE, FEATURES_FILE
+from lighting import Lighting, sky_record, source_scene
 
 BACKUP_DIR_NAME = "scenarios"
 EXCHANGE_SUFFIX = ".tbscenario"
@@ -327,7 +330,7 @@ class ScenarioBackups:
             "scene_id": entry["scene_id"], "source": entry.get("source"),
             "battle_scene": entry["battle_scene"], "game_metadata_sha256": ctx.metadata_sha256,
             "unity_version": ctx.unity_version, "terrain": terrain, "navmesh": navmesh,
-            "player_tanks": entry.get("player_tanks"),
+            "player_tanks": entry.get("player_tanks"), "own_file": own, "sky": sky_record(ctx, sc, own),
             "saved": datetime.datetime.now().isoformat(timespec="seconds")})
         return folder
 
@@ -513,7 +516,7 @@ class ScenarioBackups:
             smap[int(old)] = (new, old_tree, new_tree, new_rows != info["rows"])
 
         resolved = {}
-        own_old = (meta.get("terrain") or {}).get("own_file")
+        own_old = meta.get("own_file") or (meta.get("terrain") or {}).get("own_file")
 
         def remap(p):
             if p["m_FileID"] <= 0 or not p["m_PathID"]:
@@ -624,6 +627,31 @@ class ScenarioBackups:
             if s["scene_id"] == entry["scene_id"]:
                 s["terrain_source"] = {"file": hit[0], "pid": hit[1], "desc": self.index.describe(hit[0], hit[1])}
         self.scenarios._save_manifest()
+        return []
+
+    def _restore_sky(self, meta, battle_idx, entry):
+        """Make the scenario's own sky again (it is not part of the battle
+        scene), or go back to the game sky when the restored scene still
+        points into the old scenario's asset file; and point a leftover
+        reference to that file at the new one."""
+        from scene_model import SceneModel
+        ctx = self.ctx
+        own_old, own_new = meta.get("own_file"), own_assets_name(battle_idx)
+        day = source_scene(ctx, self.scenarios, entry)
+        m = SceneModel(ctx, battle_idx, terrain=None)
+        if day is not None:
+            m.begin("Restore sky")
+            Lighting(ctx, m, day).restore_sky(meta.get("sky"))
+            m.commit()
+        if own_old and own_old != own_new and own_old in m.sc.externals:
+            i = m.sc.externals.index(own_old)
+            m.sc.sf.externals[i].path = own_new
+            m.sc.externals[i] = own_new
+            m.sc.meta_changed = True
+        if m.sc.dirty or (getattr(m, "_own_assets", None) is not None and m.own_assets().dirty):
+            m.save()
+        if meta.get("sky") and day is None:
+            return ["Its night or dusk sky could not be made again: its source mission is not in the game."]
         return []
 
     def _restore_navmesh(self, info, battle_idx, entry):
@@ -751,6 +779,7 @@ class ScenarioBackups:
                               "game; the briefing screen was built from another mission.")
         if meta.get("navmesh"):
             report += self._restore_navmesh(meta["navmesh"], battle_idx, entry)
+        report += self._restore_sky(meta, battle_idx, entry)
         current = sm.mission_for_scene(entry["battle_scene"])[1]
         fields = {k: v for k, v in mission.items() if k not in SKIP_MISSION_FIELDS and k in current
                   and isinstance(v, (bool, int, float, str)) and type(v) is type(current[k])}

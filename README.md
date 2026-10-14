@@ -22,7 +22,8 @@ changes.
 ## What it does
 
 - Edit tanks, waypoints, routes and scenery of any mission.
-- Tank and mission settings: type, side, AI behaviour, respawns, fog.
+- Tank and mission settings: type, side, AI behaviour, respawns, fog, and
+  day, dusk or night lighting for custom scenarios.
 - Events with timers, destroyed tanks or trigger areas, for example waves.
 - New scenarios from a mission or on an empty terrain, with a choice of player tanks.
 - Terrain features for custom scenarios: trenches, tank pits, roads and more,

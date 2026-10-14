@@ -33,6 +33,7 @@ from version import APP_NAME, COPYRIGHT, __version__
 from briefing_sync import sync_mission
 from scenario_backup import EXCHANGE_SUFFIX, ScenarioBackups
 from navmesh_edit import NavMesh, decode_tile
+from lighting import PRESET_NAMES, PRESETS, Lighting, source_scene
 from terrain_edit import TerrainPaint
 from terrain_features import (AI_MAX_SLOPE, FEATURES_FILE, KIND_NAMES, KINDS, TerrainFeatures, clean_brush,
                               default_brushes, find_layer, layer_label, length, line_distance)
@@ -206,6 +207,10 @@ EVENT_TYPE_FIELDS = {
         ("New: patrol speed rate", "New_Patrol_Speed_Rate", "float"),
         ("New: combat speed rate", "New_Combat_Speed_Rate", "float")],
 }
+FOG_KEYS = ("m_Fog", "m_FogDensity", "m_FogColor", "Current_Visibility", "Dust_Particle_Multiplier")
+LIGHTING_FIELDS = [("Sun / moon colour", "sun_colour", "colour"), ("Sun / moon intensity", "sun_intensity", "float"),
+                   ("Ambient light", "ambient", "colour"), ("Sky brightness", "sky_brightness", "float"),
+                   ("Sky colour", "sky_colour", "colour")]
 MISSION_FIELDS = [
     ("RenderSettings", None, "Fog", "m_Fog", "bool"),
     ("RenderSettings", None, "Fog density", "m_FogDensity", "float"),
@@ -215,6 +220,17 @@ MISSION_FIELDS = [
     ("MonoBehaviour", "Game_Controller_CS", "Recon plane available", "Available_Recon_Plane", "bool"),
     ("MonoBehaviour", "Score_Manager_CS", "Assist score", "Enable_Assist_Score", "bool"),
 ]
+
+
+def _rgb_of(colour):
+    return (colour["r"], colour["g"], colour["b"])
+
+
+def _positive(text):
+    v = float(str(text).replace(",", "."))
+    if v < 0:
+        raise ValueError(text)
+    return v
 
 
 def hexc(rgb):
@@ -5818,7 +5834,32 @@ class EditorApp:
                            command=lambda: self.choose_player_tanks(entry)).grid(row=r, column=1, sticky="w",
                                                                                 pady=(0, 4))
         self.prop_sep()
+        tk.Label(self.props, text="Lighting and fog", font=UI_BOLD, anchor="w").grid(
+            row=self._next(), column=0, columnspan=2, sticky="w")
+        self.lighting_rows()
+        self.mission_field_rows(True)
+        lighting = [e for e in m.events if m.sc.read(e)["Event_Type"] == 7]
+        self.prop_info("Fog changes", ", ".join(m.name(m.event_go[e]) for e in lighting) or "none")
+        self.prop_sep()
+        self.mission_field_rows(False)
+        ai = [e for e in m.events if m.sc.read(e)["Event_Type"] == 2]
+        self.prop_info("AI changes", ", ".join(m.name(m.event_go[e]) for e in ai) or "none")
+        self.prop_info("Hint", "Visibility sets how far tanks can see each other. 'Change lighting' events "
+                               "(Table - Events) change fog density and visibility during the mission. Allied "
+                               "groups: select the tanks and set a follow target (for example the Player) and "
+                               "distance in Properties.")
+        self.prop_sep()
+        self.prop_info("Spawns", str(len(m.spawns)))
+        self.prop_info("Other events", str(len(m.events) - len(m.spawns)))
+        self.prop_info("Waypoints", str(len(m.waypoints)))
+        self.prop_info("Scenery meshes", str(len(m.foot)))
+
+    def mission_field_rows(self, fog):
+        """Mission settings fields: the fog group (fog=True) or the others."""
+        m = self.model
         for type_name, script, title, key, kind in MISSION_FIELDS:
+            if (key in FOG_KEYS) != fog:
+                continue
             pid = self.mission_settings_pid(type_name, script)
             if pid is None or key not in m.sc.read(pid):
                 continue
@@ -5831,20 +5872,74 @@ class EditorApp:
                 hexv = "#%02X%02X%02X" % tuple(int(round(val[c] * 255)) for c in "rgb")
                 self.prop_entry(title, hexv, lambda s, p=pid, k=key, a=val.get("a", 1.0):
                                 self.op(f"Set {k}", m.set_field, p, k, self.parse_colour(s, a)))
-        lighting = [e for e in m.events if m.sc.read(e)["Event_Type"] == 7]
-        ai = [e for e in m.events if m.sc.read(e)["Event_Type"] == 2]
-        self.prop_sep()
-        self.prop_info("Fog changes", ", ".join(m.name(m.event_go[e]) for e in lighting) or "none")
-        self.prop_info("AI changes", ", ".join(m.name(m.event_go[e]) for e in ai) or "none")
-        self.prop_info("Hint", "Fog density and colour set the look; visibility sets how far tanks can see "
-                               "each other. 'Change lighting' events (Table - Events) change both during "
-                               "the mission. Allied groups: select the tanks and set a follow target "
-                               "(for example the Player) and distance in Properties.")
-        self.prop_sep()
-        self.prop_info("Spawns", str(len(m.spawns)))
-        self.prop_info("Other events", str(len(m.events) - len(m.spawns)))
-        self.prop_info("Waypoints", str(len(m.waypoints)))
-        self.prop_info("Scenery meshes", str(len(m.foot)))
+
+    def lighting_session(self):
+        """Lighting of the open custom scenario (its source mission gives the
+        day lighting), or None."""
+        m, entry = self.model, self.scenario_entry()
+        if m is None or entry is None:
+            return None
+        key = (id(m), entry["scene_id"])
+        cached = getattr(self, "_lighting", None)
+        if cached and cached[0] == key:
+            return cached[1]
+        day = source_scene(self.ctx, self.scenarios, entry)
+        lt = Lighting(self.ctx, m, day) if day is not None else None
+        self._lighting = (key, lt)
+        return lt
+
+    def lighting_rows(self):
+        """Mission settings: the lighting preset and values (custom scenarios)."""
+        lt = self.lighting_session()
+        if lt is None:
+            self.prop_info("Lighting", "Day, dusk and night: custom scenarios only.")
+            return
+        try:
+            cur, preset = lt.lighting(), lt.preset()
+        except Exception as ex:
+            self.prop_info("Lighting", f"not available ({ex})")
+            return
+        names = [PRESET_NAMES[k] for k in ("day", "dusk", "night", "custom")]
+        keys = ["day", "dusk", "night", "custom"]
+        self.prop_combo("Lighting", names, keys.index(preset),
+                        lambda i: self.set_lighting_preset(keys[i]) if keys[i] != "custom" else None)
+        for title, key, kind in LIGHTING_FIELDS:
+            v = cur[key]
+            if kind == "colour":
+                text = "#%02X%02X%02X" % tuple(int(round(min(1.0, max(0.0, c)) * 255)) for c in v)
+                self.prop_entry(title, text, lambda s, k=key: self.set_lighting(
+                    {k: _rgb_of(self.parse_colour(s))}, label=f"Set {k}"))
+            else:
+                self.prop_entry(title, f"{v:g}", lambda s, k=key: self.set_lighting(
+                    {k: _positive(s)}, label=f"Set {k}"))
+
+    def set_lighting(self, values, preset=False, label="Lighting"):
+        """Change lighting values of the open custom scenario (one undo step)."""
+        lt, m = self.lighting_session(), self.model
+        if lt is None:
+            return
+        m.begin(label)
+        try:
+            undo = lt.apply(values, preset=preset)
+        except Exception as ex:
+            m.commit()
+            self.status(f"{label} failed: {ex}", "warn", banner=True)
+            return
+        m.commit(undo_fn=undo)
+        self.changed()
+
+    def set_lighting_preset(self, name):
+        lt, m = self.lighting_session(), self.model
+        if lt is None:
+            return
+        if name == "day":
+            m.begin("Lighting: Day")
+            lt.apply_day()
+            m.commit()
+            self.changed()
+        else:
+            self.set_lighting(dict(PRESETS[name]), preset=True, label=f"Lighting: {PRESET_NAMES[name]}")
+        self.status(f"Lighting: {PRESET_NAMES[name]}. Save to see it in the game.", "ok")
 
     @staticmethod
     def parse_colour(text, alpha=1.0):
