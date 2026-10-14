@@ -158,6 +158,19 @@ class ToolTest(unittest.TestCase):
         app.undo()
         app.undo()
 
+    def test_player_tank_dialog(self):
+        tanks = [{"prop": "A_TankProp", "name": "A", "available": True, "free": False},
+                 {"prop": "B_TankProp", "name": "B", "available": False, "free": True}]
+        dlg = editor.PlayerTankDialog(self.root, tanks)
+        self.assertEqual(dlg.collect(), {"A_TankProp": (True, False), "B_TankProp": (False, True)})
+        dlg.set_all(2, True)
+        self.assertEqual(dlg.collect()["A_TankProp"], (True, True))
+        for _, a, _ in dlg.rows:
+            a.set(False)
+        with self.assertRaises(ValueError):
+            dlg.collect()
+        dlg.destroy()
+
     def test_messages_use_the_message_bar(self):
         app = self.app
         app.status("Test warning", "warn", banner=True)

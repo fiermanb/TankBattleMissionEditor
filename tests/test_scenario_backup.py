@@ -198,5 +198,38 @@ class ScenarioExchangeTest(unittest.TestCase):
             backups.import_file(bad)
 
 
+@unittest.skipUnless(os.path.isdir(GAME), "game not installed")
+class PlayerTanksTest(unittest.TestCase):
+    def test_choice_is_set_and_survives_a_restore(self):
+        tmp = tempfile.mkdtemp(dir=os.path.dirname(GAME))
+        self.addCleanup(remove_tree, tmp)
+        game = os.path.join(tmp, "game")
+        os.makedirs(game)
+        mirror_game(game)
+        ctx = GameContext(game)
+        mgr = ScenarioManager(ctx, os.path.join(tmp, "backups"))
+        src = next(p for p, d in mgr.missions() if d["Battle_Scene_Name"] == "26_Open_Field_Mass_Assault")
+        mgr.create(src, "Tank Choice", "x")
+        entry = mgr.custom[0]
+        tanks = mgr.player_tanks(entry)
+        self.assertEqual(len(tanks), 19, "every player tank has a button on the briefing screen")
+        props = sorted(t["prop"] for t in tanks)
+        choice = {p: (i % 3 != 0, i % 2 == 0) for i, p in enumerate(props)}
+        with self.assertRaises(ValueError):
+            mgr.set_player_tanks(entry, {p: (False, False) for p in props})
+        self.assertEqual(mgr.set_player_tanks(entry, choice), sum(1 for a, _ in choice.values() if a))
+        got = {t["prop"]: (t["available"], t["free"]) for t in mgr.player_tanks(entry)}
+        self.assertEqual(got, choice)
+
+        backups = ScenarioBackups(ctx, mgr)
+        entry = mgr.custom[0]
+        backups.backup(entry)
+        mgr.remove_all()
+        backups.restore(entry["scene_id"])
+        restored = mgr.custom[0]
+        got = {t["prop"]: (t["available"], t["free"]) for t in mgr.player_tanks(restored)}
+        self.assertEqual(got, choice, "a restored scenario gets its tank choice back")
+
+
 if __name__ == "__main__":
     unittest.main()

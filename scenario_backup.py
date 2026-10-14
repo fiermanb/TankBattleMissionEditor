@@ -275,6 +275,7 @@ class ScenarioBackups:
             "scene_id": entry["scene_id"], "source": entry.get("source"),
             "battle_scene": entry["battle_scene"], "game_metadata_sha256": ctx.metadata_sha256,
             "unity_version": ctx.unity_version, "terrain": terrain, "navmesh": navmesh,
+            "player_tanks": entry.get("player_tanks"),
             "saved": datetime.datetime.now().isoformat(timespec="seconds")})
         return folder
 
@@ -628,6 +629,12 @@ class ScenarioBackups:
         sm._save_manifest()
         battle = SceneModel(self.ctx, battle_idx, terrain=None)
         report += sync_mission(self.ctx, sm, battle, sm.backup_dir)[:1]
+        if meta.get("player_tanks"):
+            try:
+                sm.set_player_tanks(entry, {k: tuple(v) for k, v in meta["player_tanks"].items()})
+                entry = next(c for c in sm.custom if c["battle_index"] == battle_idx)
+            except ValueError as e:
+                report.append(f"The player's tank choice could not be restored: {e}")
         if entry["scene_id"] != meta["scene_id"]:
             shutil.rmtree(folder, ignore_errors=True)
         self.backup(entry)

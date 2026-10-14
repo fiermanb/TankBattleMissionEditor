@@ -25,7 +25,7 @@ changes.
 - Edit tanks, waypoints, routes and scenery of any mission.
 - Tank and mission settings: type, side, AI behaviour, respawns, fog.
 - Events with timers, destroyed tanks or trigger areas, for example waves.
-- New scenarios from a mission or on an empty terrain.
+- New scenarios from a mission or on an empty terrain, with a choice of player tanks.
 - Terrain painting and height brushes for custom scenarios.
 - AI tanks of custom scenarios drive around changed terrain and objects.
 - Back up, export and import scenarios.

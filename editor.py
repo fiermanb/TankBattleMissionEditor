@@ -671,6 +671,40 @@ class TankListDialog(Dialog):
         return [self.items[i][1] for i in self.lb.curselection()]
 
 
+class PlayerTankDialog(Dialog):
+    """The tanks the briefing screen offers the player: shown in the list, and
+    free (no unlocking needed)."""
+
+    def __init__(self, parent, tanks):
+        super().__init__(parent, "Player tanks")
+        tk.Label(self.body, anchor="w", justify="left", text=(
+            "Available: the tank is shown in the briefing screen's tank list.\n"
+            "Free: it can be chosen without unlocking it first.")).grid(row=0, column=0, columnspan=3, sticky="w")
+        for c, title in enumerate(("Tank", "Available", "Free")):
+            tk.Label(self.body, text=title, font=UI_BOLD, anchor="w").grid(row=1, column=c, sticky="w", padx=(0, 12))
+        self.rows = []
+        for r, t in enumerate(sorted(tanks, key=lambda t: t["name"]), start=2):
+            a, f = tk.BooleanVar(value=t["available"]), tk.BooleanVar(value=t["free"])
+            tk.Label(self.body, text=t["name"], anchor="w").grid(row=r, column=0, sticky="w", padx=(0, 12))
+            ttk.Checkbutton(self.body, variable=a).grid(row=r, column=1)
+            ttk.Checkbutton(self.body, variable=f).grid(row=r, column=2)
+            self.rows.append((t["prop"], a, f))
+        bar = tk.Frame(self.body)
+        bar.grid(row=len(tanks) + 2, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        for text, col, value in (("All available", 1, True), ("All free", 2, True)):
+            ttk.Button(bar, text=text, command=lambda c=col, v=value: self.set_all(c, v)).pack(side="left", padx=(0, 6))
+
+    def set_all(self, column, value):
+        for _, a, f in self.rows:
+            (a if column == 1 else f).set(value)
+
+    def collect(self):
+        result = {prop: (a.get(), f.get()) for prop, a, f in self.rows}
+        if not any(a for a, _ in result.values()):
+            raise ValueError("At least one tank must be available.")
+        return result
+
+
 class GameFolderDialog(Dialog):
     """Choose the installed game (Steam) folder."""
 
@@ -4919,6 +4953,21 @@ class EditorApp:
                 self.prop_info("Category", category(m.name(go)))
             self.prop_info("Path", m.path(go))
 
+    def choose_player_tanks(self, entry):
+        """Mission settings > Choose player tanks: which tanks the briefing screen
+        of this custom scenario offers the player."""
+        res = PlayerTankDialog(self.root, self.scenarios.player_tanks(entry)).run()
+        if res is None or not self.game_closed("change the briefing screen"):
+            return
+        try:
+            n = self.scenarios.set_player_tanks(entry, res)
+        except ValueError as e:
+            self.status(f"Player tanks not changed: {e}", "warn", banner=True)
+            return
+        self.backup_scenario(entry["battle_index"])
+        self.refresh_props()
+        self.status(f"Briefing screen updated: {n} tank(s) available to the player.", "ok", banner=True)
+
     def mission_settings_pid(self, type_name, script):
         m = self.model
         for pid in (m.mb if type_name == "MonoBehaviour" else m.sc.all_pids()):
@@ -4938,6 +4987,20 @@ class EditorApp:
         found = self.scenarios.mission_for_scene(m.label) if self.scenarios else None
         if found:
             self.prop_info("Allied AI tanks", f"{found[1].get('Allies_Count', 0)} (briefing count)")
+        entry = next((s for s in self.scenarios.custom if s["battle_index"] == m.index), None) \
+            if self.scenarios else None
+        if entry is not None:
+            try:
+                tanks = self.scenarios.player_tanks(entry)
+            except Exception:
+                tanks = []
+            if tanks:
+                self.prop_info("Player tanks", f"{sum(t['available'] for t in tanks)} of {len(tanks)} available, "
+                                               f"{sum(t['free'] for t in tanks if t['available'])} free")
+                r = self._next()
+                ttk.Button(self.props, text="Choose player tanks...",
+                           command=lambda: self.choose_player_tanks(entry)).grid(row=r, column=1, sticky="w",
+                                                                                pady=(0, 4))
         self.prop_sep()
         for type_name, script, title, key, kind in MISSION_FIELDS:
             pid = self.mission_settings_pid(type_name, script)

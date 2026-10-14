@@ -39,7 +39,7 @@ def replace_file(path, data):
     os.replace(tmp, path)
 
 from scene_io import SceneFile
-from scene_model import SceneModel
+from scene_model import SceneModel, tank_catalogue
 
 MISSION_SCRIPT = "Scene_Prop_SO"
 MENU_MANAGER_SCRIPT = "Menu_Scene_Manager_CS"
@@ -52,6 +52,8 @@ CUSTOM_PREFIX = "90_"
 CUSTOM_PAGE_NAME = "Mission_List (Custom)"
 SHARED_FILES = ("globalgamemanagers", MISSION_ASSETS, f"level{SELECT_SCENE}")
 CUSTOM_PAGE_TITLE = "Custom Missions"
+TANK_BUTTON_SCRIPT = "Menu_Tank_Select_Button_CS"
+PLAYER_TANK_LIST = "Image (Selectable Tank List) (Player)"
 ROWS_PER_PAGE = 8
 
 
@@ -212,6 +214,61 @@ class ScenarioManager:
             if s["scene_id"] == entry["scene_id"]:
                 s["source"] = src["Scene_ID"]
         self._save_manifest()
+
+    def _player_buttons(self, m):
+        """{button GameObject: (prop name, tank name, Menu_Tank_Select_Button_CS pid)}
+        of the player's tank list on a briefing screen."""
+        cat = {(t[0], t[1]): t for t in tank_catalogue(self.ctx)}
+        out = {}
+        for p in m.mb:
+            if m.script_class(p) != TANK_BUTTON_SCRIPT:
+                continue
+            d = m.sc.read(p)
+            g = d["m_GameObject"]["m_PathID"]
+            parent = m.parent_go(g)
+            owner = m.parent_go(parent) if parent is not None else None
+            ref = d["tankProp"]
+            t = cat.get((m.sc.externals[ref["m_FileID"] - 1], ref["m_PathID"])) if ref["m_FileID"] else None
+            if t is not None and owner is not None and m.name(owner) == PLAYER_TANK_LIST:
+                out[g] = (t[2], t[3], p)
+        return out
+
+    def player_tanks(self, entry):
+        """[{"prop", "name", "available", "free"}] of the tanks the briefing screen of
+        custom scenario `entry` offers the player: available = shown in the list,
+        free = can be chosen without unlocking it first."""
+        m = SceneModel(self.ctx, entry["menu_index"], terrain=None)
+        return [{"prop": prop, "name": name, "available": bool(m.go[g]["m_IsActive"]),
+                 "free": bool(m.sc.read(p)["forceFree"])}
+                for g, (prop, name, p) in self._player_buttons(m).items()]
+
+    def set_player_tanks(self, entry, choices):
+        """Set the player's tank choice of custom scenario `entry`: choices maps a
+        tank prop name to (available, free). It is also kept in the scenario
+        record, so a restored backup gets it back. Returns the number of tanks
+        available."""
+        m = SceneModel(self.ctx, entry["menu_index"], terrain=None)
+        buttons = self._player_buttons(m)
+        if not buttons:
+            raise ValueError("this briefing screen has no player tank list")
+        final = {prop: choices.get(prop, (bool(m.go[g]["m_IsActive"]), bool(m.sc.read(p)["forceFree"])))
+                 for g, (prop, _, p) in buttons.items()}
+        if not any(a for a, _ in final.values()):
+            raise ValueError("at least one tank must be available")
+        m.begin("Player tanks")
+        for g, (prop, _, p) in buttons.items():
+            available, free = final[prop]
+            if bool(m.go[g]["m_IsActive"]) != available:
+                m.set_field(g, "m_IsActive", available)
+            if bool(m.sc.read(p)["forceFree"]) != free:
+                m.set_field(p, "forceFree", free)
+        m.commit()
+        m.save()
+        for s in self.manifest["scenarios"]:
+            if s["scene_id"] == entry["scene_id"]:
+                s["player_tanks"] = {prop: [a, f] for prop, (a, f) in final.items()}
+        self._save_manifest()
+        return sum(1 for a, _ in final.values() if a)
 
     def terrains(self):
         """The distinct terrains of the original missions, for starting a scenario
