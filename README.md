@@ -72,7 +72,23 @@ version (also: Scenario > Restore scenarios from backup).
 Scenario > Export scenario saves a scenario as one `.tbscenario` file to share;
 Scenario > Import scenario installs one. The file holds no game files, only the
 map and the names of the game assets it uses: the recipient needs the game and
-this editor, in any game version.
+this editor, in any game version. Deleted objects, including the switched-off
+objects of the mission a scenario was made from, are left out of the file.
+
+## Included scenarios
+
+Two scenarios made with the editor come with it (`Scenarios` folder of the
+release, `scenarios/` in the source). Install them with Scenario > Import
+scenario.
+
+- **Kursk - Deep Defense**: July 1943. Hold three trench lines with a T-34
+  company against three German waves of 125 tanks after an artillery barrage;
+  the defenders fall back when a line is breached.
+- **Kursk - Breakthrough**: the same battlefield from the other side. Attack
+  with the first German wave in a Panzer IV and break through all three
+  Soviet lines.
+
+Both offer every tank of the game as the player's tank.
 
 ## Limitations
 

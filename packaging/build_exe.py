@@ -8,7 +8,8 @@ Steps: create a clean virtual environment (packaging/.venv) with pinned
 dependencies, generate the icon and version resource, run PyInstaller (one-file,
 windowed), run the executable's self-test against an installed game, and
 assemble packaging/release/TankBattleMissionEditor-<version>-win64(.zip) with the
-executable, README.txt, LICENSE.txt and THIRD-PARTY-NOTICES.txt.
+executable, README.txt, LICENSE.txt, THIRD-PARTY-NOTICES.txt and the included
+scenarios (scenarios/*.tbscenario, in a Scenarios folder).
 
 The proprietary FMOD library is not included: UnityPy's audio conversion is
 replaced by packaging/stubs/fmod_toolkit (the editor does not use audio).
@@ -181,10 +182,19 @@ def assemble(exe, version, notice_file):
     shutil.copy2(os.path.join(HERE, "README-release.txt"), os.path.join(folder, "README.txt"))
     shutil.copy2(os.path.join(SRC, "LICENSE"), os.path.join(folder, "LICENSE.txt"))
     shutil.copy2(notice_file, folder)
+    scen = os.path.join(SRC, "scenarios")
+    shipped = sorted(f for f in os.listdir(scen) if f.endswith(".tbscenario")) if os.path.isdir(scen) else []
+    if shipped:
+        os.makedirs(os.path.join(folder, "Scenarios"))
+        for f in shipped:
+            shutil.copy2(os.path.join(scen, f), os.path.join(folder, "Scenarios", f))
     zpath = folder + ".zip"
     with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
-        for f in sorted(os.listdir(folder)):
-            z.write(os.path.join(folder, f), f"{NAME}/{f}")
+        for base, _, files in sorted(os.walk(folder)):
+            for f in sorted(files):
+                path = os.path.join(base, f)
+                rel = os.path.relpath(path, folder).replace(os.sep, "/")
+                z.write(path, f"{NAME}/{rel}")
     return folder, zpath
 
 

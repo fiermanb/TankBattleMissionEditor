@@ -43,6 +43,13 @@ WHAT IT DOES
 - New scenarios from a mission or on an empty terrain (Scenario menu); they
   appear on a "Custom Missions" page.
 
+INCLUDED SCENARIOS
+------------------
+The Scenarios folder holds two scenarios made with the editor: Kursk - Deep
+Defense (hold three trench lines against three German waves) and Kursk -
+Breakthrough (attack the same lines with the first German wave). Install them
+with Scenario > Import scenario.
+
 CONTROLS
 --------
 Click / Shift+click / Ctrl+click: select / add / toggle.

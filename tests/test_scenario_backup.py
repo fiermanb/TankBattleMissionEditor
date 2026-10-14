@@ -13,11 +13,12 @@ import os
 import sys
 import tempfile
 import unittest
+import zipfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from scenario_backup import ScenarioBackups, convert_fields  # noqa: E402
+from scenario_backup import ScenarioBackups, convert_fields, purge_inactive, walk_pptrs  # noqa: E402
 from scenarios import ScenarioManager  # noqa: E402
 from scene_io import GameContext, SceneFile, layout_tree  # noqa: E402
 from scene_model import SceneModel  # noqa: E402
@@ -166,21 +167,41 @@ class ScenarioExchangeTest(unittest.TestCase):
         _, battle_idx = mgr.create(src, "Shared Map", "For a friend.")
         m = SceneModel(ctx, battle_idx, terrain=None)
         hostile = next(e for e in m.spawns if m.sc.read(e)["Relationship"] == 1)
+        scenery = next(m.object_root(g) for g in m.foot if m.active(m.object_root(g)))
         m.begin("move")
         m.move_to(m.tr_of_go[m.event_go[hostile]], 12.0, 34.0, follow_terrain=False)
+        m.delete(scenery)
         m.commit()
         m.save()
-        with open(ctx.scene_path(battle_idx), "rb") as f:
-            original = f.read()
+        full = SceneFile(ctx, ctx.scene_path(battle_idx))
 
         backups = ScenarioBackups(ctx, mgr)
         path = os.path.join(tmp, "Shared_Map.tbscenario")
         backups.export(mgr.custom[0], path, "test")
+        with zipfile.ZipFile(path) as z:
+            shipped = z.read("battle.level")
+        level = os.path.join(tmp, "shipped.level")
+        with open(level, "wb") as f:
+            f.write(shipped)
+        sc = SceneFile(ctx, level)
+        kept = set(sc.all_pids())
+        self.assertNotIn(scenery, kept, "a deleted object is left out of the export")
+        self.assertTrue(kept < set(full.all_pids()))
+        self.assertIn(m.event_go[hostile], kept)
+        for p in kept:
+            walk_pptrs(sc.read(p), lambda r: self.assertTrue(
+                r["m_FileID"] or not r["m_PathID"] or r["m_PathID"] in kept, f"dangling reference in {p}"))
+            if sc.type_name(p) not in ("Transform", "RectTransform"):
+                self.assertEqual(sc.read(p), full.read(p), p)
+        self.assertEqual(purge_inactive(sc), (0, 0), "nothing more to remove")
+        self.assertEqual(os.path.exists(os.path.join(backups.folder(mgr.custom[0]["scene_id"]), "battle.level")),
+                         True, "the local backup keeps the full scene")
 
         title, _, second_idx, _ = backups.import_file(path)
         self.assertEqual(title, "Shared Map (2)", "a name in use gets a number")
         with open(ctx.scene_path(second_idx), "rb") as f:
-            self.assertEqual(f.read(), original)
+            self.assertEqual(f.read(), shipped)
+        original = shipped
 
         mgr.remove_all()
         for b in backups.list():

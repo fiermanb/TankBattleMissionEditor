@@ -25,7 +25,12 @@ Each backup (backups/<installation>/scenarios/<scene id>/) holds
 
 A backup can be exported as one .tbscenario file (a zip of these files) and
 imported in another installation: it contains no game assets, only the map and
-the names of the assets it uses, which every copy of the game has.
+the names of the assets it uses, which every copy of the game has. The
+exported scene leaves out deactivated objects that nothing in the scene
+refers to (purge_inactive): objects deleted in the editor and the
+switched-off objects of the mission the scenario was made from. Inactive
+objects that the game switches on while playing (menus, reticles, route
+packs) are referred to by its scripts and stay.
 
 Restoring creates the scenario again from its source mission in the installed
 game version (fresh briefing scene, mission asset and mission select entry),
@@ -63,6 +68,72 @@ GGM = "globalgamemanagers.assets"
 
 def _is_pptr(v):
     return isinstance(v, dict) and len(v) == 2 and "m_FileID" in v and "m_PathID" in v
+
+
+def purge_inactive(sc):
+    """Remove from SceneFile `sc` every deactivated GameObject, with all
+    objects below it, that no object remaining in the scene refers to. A
+    subtree referred to from outside stays (the game switches it on while
+    playing), and so does everything it refers to. Returns (subtrees, objects)
+    removed."""
+    tr_types = ("Transform", "RectTransform")
+    data = {p: sc.read(p) for p in sc.all_pids()}
+    go_of, comps, tr_of = {}, {}, {}
+    for p, d in data.items():
+        if sc.type_name(p) == "GameObject":
+            comps[p] = [c["component"]["m_PathID"] for c in d["m_Component"]]
+            for c in comps[p]:
+                go_of[c] = p
+                if c in data and sc.type_name(c) in tr_types:
+                    tr_of[p] = c
+    children = {p: [c["m_PathID"] for c in d["m_Children"]] for p, d in data.items()
+                if sc.type_name(p) in tr_types}
+    father = {p: d["m_Father"]["m_PathID"] for p, d in data.items() if sc.type_name(p) in tr_types}
+
+    def subtree(go):
+        out, stack = [], [tr_of[go]]
+        while stack:
+            t = stack.pop()
+            g = go_of.get(t)
+            if g is None:
+                continue
+            out.append(g)
+            out.extend(comps[g])
+            stack.extend(children.get(t, []))
+        return set(out)
+
+    def under_active(go):
+        t = father.get(tr_of[go], 0)
+        while t:
+            if t not in go_of or not data[go_of[t]]["m_IsActive"]:
+                return False
+            t = father.get(t, 0)
+        return True
+
+    units = {g: subtree(g) for g in comps if not data[g]["m_IsActive"] and g in tr_of and under_active(g)}
+    targets = {}
+    for p, d in data.items():
+        skip = "m_Children" if sc.type_name(p) in tr_types else None
+        found = set()
+        walk_pptrs({k: v for k, v in d.items() if k != skip},
+                   lambda r: found.add(r["m_PathID"]) if r["m_FileID"] == 0 and r["m_PathID"] else None)
+        targets[p] = found
+    while True:
+        owner = {p: g for g, u in units.items() for p in u}
+        kept = {owner[t] for p, ts in targets.items() if p not in owner for t in ts if t in owner}
+        if not kept:
+            break
+        for g in kept:
+            del units[g]
+    gone = set().union(*units.values()) if units else set()
+    for g in units:
+        parent = father.get(tr_of[g], 0)
+        if parent and parent not in gone:
+            d = dict(sc.read(parent))
+            d["m_Children"] = [c for c in d["m_Children"] if c["m_PathID"] != tr_of[g]]
+            sc.write(parent, d)
+    sc.remove(gone)
+    return len(units), len(gone)
 
 
 def walk_pptrs(value, fn):
@@ -231,29 +302,7 @@ class ScenarioBackups:
         path = ctx.scene_path(entry["battle_index"])
         sc = SceneFile(ctx, path)
         own = own_assets_name(entry["battle_index"])
-
-        refs, scripts = {}, {}
-
-        def note(p):
-            if p["m_FileID"] > 0 and p["m_PathID"]:
-                file = sc.externals[p["m_FileID"] - 1]
-                if file == own:
-                    return p
-                key = str(p["m_PathID"])
-                per = refs.setdefault(file, {})
-                if key not in per:
-                    per[key] = self.index.describe(file, p["m_PathID"])
-            return p
-        for pid in sc.all_pids():
-            walk_pptrs(sc.read(pid), note)
-        for st in sc.sf.script_types:
-            fid = st.local_serialized_file_index
-            if fid > 0 and sc.externals[fid - 1] == GGM:
-                spid = st.local_identifier_in_file
-                info = ctx.scripts.get(spid)
-                if info:
-                    scripts[str(spid)] = {"key": script_key(*info), "rows": ctx.script_rows(spid)}
-                    note({"m_FileID": fid, "m_PathID": spid})
+        refs, scripts = self._scan(sc, own)
 
         folder = self.folder(entry["scene_id"])
         os.makedirs(folder, exist_ok=True)
@@ -281,6 +330,35 @@ class ScenarioBackups:
             "player_tanks": entry.get("player_tanks"),
             "saved": datetime.datetime.now().isoformat(timespec="seconds")})
         return folder
+
+    def _scan(self, sc, own):
+        """(refs, scripts) of a battle scene: every object in another game file
+        that it refers to (described by type, name and ordinal) and the field
+        layout of every game script it uses."""
+        ctx = self.ctx
+        refs, scripts = {}, {}
+
+        def note(p):
+            if p["m_FileID"] > 0 and p["m_PathID"]:
+                file = sc.externals[p["m_FileID"] - 1]
+                if file == own:
+                    return p
+                key = str(p["m_PathID"])
+                per = refs.setdefault(file, {})
+                if key not in per:
+                    per[key] = self.index.describe(file, p["m_PathID"])
+            return p
+        for pid in sc.all_pids():
+            walk_pptrs(sc.read(pid), note)
+        for st in sc.sf.script_types:
+            fid = st.local_serialized_file_index
+            if fid > 0 and sc.externals[fid - 1] == GGM:
+                spid = st.local_identifier_in_file
+                info = ctx.scripts.get(spid)
+                if info:
+                    scripts[str(spid)] = {"key": script_key(*info), "rows": ctx.script_rows(spid)}
+                    note({"m_FileID": fid, "m_PathID": spid})
+        return refs, scripts
 
     def _backup_terrain(self, sc, own, entry, folder):
         """Store the weights of a painted terrain (the scenario's own copy) in
@@ -321,11 +399,19 @@ class ScenarioBackups:
         """Write a custom scenario (manifest entry) as one .tbscenario file, from
         a fresh backup of its current state."""
         folder = self.backup(entry)
+        sc = SceneFile(self.ctx, os.path.join(folder, "battle.level"))
+        purge_inactive(sc)
+        refs, scripts = self._scan(sc, own_assets_name(entry["battle_index"]))
+        purged = {"battle.level": sc.build(compact=True),
+                  "refs.json.gz": gzip.compress(json.dumps(refs).encode("utf-8")),
+                  "scripts.json.gz": gzip.compress(json.dumps(scripts).encode("utf-8"))}
         tmp = path + ".tmp"
         with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as z:
             z.writestr("format.json", json.dumps({"format": EXCHANGE_FORMAT, "editor_version": editor_version}))
             for name in BACKUP_FILES + OPTIONAL_FILES:
-                if os.path.exists(os.path.join(folder, name)):
+                if name in purged:
+                    z.writestr(name, purged[name])
+                elif os.path.exists(os.path.join(folder, name)):
                     z.write(os.path.join(folder, name), name)
         os.replace(tmp, path)
         return path

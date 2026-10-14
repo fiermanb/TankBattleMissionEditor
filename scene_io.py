@@ -328,6 +328,7 @@ class SceneFile:
         self.new_objects = {}
         self.foreign = {}
         self.obj_nodes = {}
+        self.removed = set()
         self.meta_changed = False
         version = struct.unpack_from(">I", self.raw, 8)[0]
         if version < 22:
@@ -353,7 +354,7 @@ class SceneFile:
         return self.objects[self._template(pid)].type_id
 
     def all_pids(self):
-        return list(self.objects.keys()) + list(self.new_objects.keys())
+        return [p for p in self.objects.keys() if p not in self.removed] + list(self.new_objects.keys())
 
     def script_class(self, pid):
         """Class name of a MonoBehaviour's script (game scripts only), else None."""
@@ -459,6 +460,17 @@ class SceneFile:
         self.foreign.pop(pid, None)
         self._cache.pop(pid, None)
 
+    def remove(self, pids):
+        """Leave objects out of the file (existing or new). The caller makes sure
+        nothing else refers to them."""
+        for pid in pids:
+            if pid in self.new_objects:
+                self.remove_new(pid)
+            elif pid in self.objects:
+                self.removed.add(pid)
+                self.changed.pop(pid, None)
+                self._cache.pop(pid, None)
+
     # ---- metadata: externals and types ----------------------------------
 
     def ensure_external(self, identifier):
@@ -510,7 +522,7 @@ class SceneFile:
 
     @property
     def dirty(self):
-        return bool(self.changed or self.new_objects or self.meta_changed)
+        return bool(self.changed or self.new_objects or self.meta_changed or self.removed)
 
     def serialize(self, pid):
         writer = EndianBinaryWriter(endian=self.endian)
@@ -570,6 +582,8 @@ class SceneFile:
 
         entries = {}
         for pid, o in self.objects.items():
+            if pid in self.removed:
+                continue
             if compact:
                 if pid not in self.changed:
                     blob = raw[o.byte_start:o.byte_start + o.byte_size]
@@ -595,7 +609,7 @@ class SceneFile:
         path = path or self.path
         out = self.build(compact)
         check = next(iter(UnityPy.load(out).files.values()))
-        if len(check.objects) != len(self.objects) + len(self.new_objects):
+        if len(check.objects) != len(self.objects) - len(self.removed) + len(self.new_objects):
             raise ValueError("internal check failed: object count mismatch after build")
         tmp = path + ".tmp"
         with open(tmp, "wb") as f:
