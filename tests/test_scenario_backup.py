@@ -220,6 +220,19 @@ class PlayerTanksTest(unittest.TestCase):
         self.assertEqual(mgr.set_player_tanks(entry, choice), sum(1 for a, _ in choice.values() if a))
         got = {t["prop"]: (t["available"], t["free"]) for t in mgr.player_tanks(entry)}
         self.assertEqual(got, choice)
+        # the shown tanks are laid out without gaps, 12 per column, each with a size
+        from scene_model import SceneModel
+        menu = SceneModel(ctx, entry["menu_index"], terrain=None)
+        buttons = mgr._player_buttons(menu)
+        lst = menu.parent_go(next(iter(buttons)))
+        shown = [menu.go_of_tr[c["m_PathID"]] for c in menu.tr[menu.tr_of_go[lst]]["m_Children"]
+                 if menu.go_of_tr.get(c["m_PathID"]) in buttons and menu.go[menu.go_of_tr[c["m_PathID"]]]["m_IsActive"]]
+        for i, g in enumerate(shown):
+            t = menu.sc.read(menu.tr_of_go[g])
+            col, row = divmod(i, 12)
+            self.assertEqual(t["m_AnchoredPosition"]["y"], -(row + 0.5) * t["m_SizeDelta"]["y"])
+            self.assertGreater(t["m_SizeDelta"]["x"], 0)
+            self.assertEqual(t["m_AnchoredPosition"]["x"] > 0, col > 0)
 
         backups = ScenarioBackups(ctx, mgr)
         entry = mgr.custom[0]

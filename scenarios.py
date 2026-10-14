@@ -54,6 +54,9 @@ SHARED_FILES = ("globalgamemanagers", MISSION_ASSETS, f"level{SELECT_SCENE}")
 CUSTOM_PAGE_TITLE = "Custom Missions"
 TANK_BUTTON_SCRIPT = "Menu_Tank_Select_Button_CS"
 PLAYER_TANK_LIST = "Image (Selectable Tank List) (Player)"
+TANK_LIST_ROWS = 12          # rows per column, as on the Free Roam briefing screens
+TANK_LIST_TOP = 50.0         # top edge of the list frame (its centre y plus half its height)
+TANK_LIST_MIN_HEIGHT = 200.0
 ROWS_PER_PAGE = 8
 
 
@@ -233,6 +236,41 @@ class ScenarioManager:
                 out[g] = (t[2], t[3], p)
         return out
 
+    @staticmethod
+    def _layout_tank_list(m, buttons):
+        """Place the shown buttons of the player's tank list in columns of
+        TANK_LIST_ROWS in their order in the scene (German tanks first), with the
+        list's cell size and spacing, and make the frame high enough. The game's
+        list has its GridLayoutGroup switched off: each button keeps the position
+        stored in the scene."""
+        any_button = next(iter(buttons))
+        lst = m.parent_go(any_button)
+        frame = m.parent_go(lst)
+        grid = next((m.sc.read(c) for c in m.comps[lst] if m.sc.type_name(c) == "MonoBehaviour"
+                     and "m_CellSize" in m.sc.read(c)), None)
+        cell = (grid["m_CellSize"]["x"], grid["m_CellSize"]["y"]) if grid else (80.0, 16.0)
+        gap = grid["m_Spacing"]["x"] if grid else 15.0
+        shown = [m.go_of_tr[c["m_PathID"]] for c in m.tr[m.tr_of_go[lst]]["m_Children"]
+                 if m.go_of_tr.get(c["m_PathID"]) in buttons and m.go[m.go_of_tr[c["m_PathID"]]]["m_IsActive"]]
+        for i, g in enumerate(shown):
+            col, row = divmod(i, TANK_LIST_ROWS)
+            t = m.edit(m.tr_of_go[g])
+            t["m_AnchorMin"] = {"x": 0.0, "y": 1.0}
+            t["m_AnchorMax"] = {"x": 0.0, "y": 1.0}
+            t["m_Pivot"] = {"x": 0.0, "y": 0.5}
+            t["m_SizeDelta"] = {"x": cell[0], "y": cell[1]}
+            t["m_AnchoredPosition"] = {"x": col * (cell[0] + gap), "y": -(row + 0.5) * cell[1]}
+            m._set(m.tr_of_go[g], t)
+        rows = min(len(shown), TANK_LIST_ROWS)
+        height = max(TANK_LIST_MIN_HEIGHT, rows * cell[1] + 28.0)
+        t = m.edit(m.tr_of_go[frame])
+        t["m_SizeDelta"] = {"x": t["m_SizeDelta"]["x"], "y": height}
+        t["m_AnchoredPosition"] = {"x": t["m_AnchoredPosition"]["x"], "y": TANK_LIST_TOP - height / 2}
+        m._set(m.tr_of_go[frame], t)
+        t = m.edit(m.tr_of_go[lst])
+        t["m_SizeDelta"] = {"x": t["m_SizeDelta"]["x"], "y": max(t["m_SizeDelta"]["y"], rows * cell[1])}
+        m._set(m.tr_of_go[lst], t)
+
     def player_tanks(self, entry):
         """[{"prop", "name", "available", "free"}] of the tanks the briefing screen of
         custom scenario `entry` offers the player: available = shown in the list,
@@ -262,6 +300,7 @@ class ScenarioManager:
                 m.set_field(g, "m_IsActive", available)
             if bool(m.sc.read(p)["forceFree"]) != free:
                 m.set_field(p, "forceFree", free)
+        self._layout_tank_list(m, buttons)
         m.commit()
         m.save()
         for s in self.manifest["scenarios"]:
