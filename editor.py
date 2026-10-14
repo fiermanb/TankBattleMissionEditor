@@ -36,6 +36,7 @@ from navmesh_edit import NavMesh, decode_tile
 from terrain_edit import TerrainPaint
 from terrain_features import (AI_MAX_SLOPE, FEATURES_FILE, KIND_NAMES, KINDS, TerrainFeatures, clean_brush,
                               default_brushes, find_layer, layer_label, length, line_distance)
+from terrain_features import bbox as feature_bbox
 from object_import import ObjectLibrary, base_name, category, import_object, reconnect_event_refs
 from scenarios import ScenarioManager
 from scene_io import GameContext
@@ -2142,9 +2143,14 @@ class EditorApp:
             self.recompute_features(changed)
             tp.resync()
         m.commit(undo_fn=undo)
-        self.changed()
         if moved:
+            self.changed()
             self.status(f"{moved} object(s) moved with the ground.", "ok")
+        else:
+            self.update_title()
+            self.refresh_feature_list()
+            self.refresh_props()
+            self.request_render()
         return True
 
     def recompute_features(self, changed):
@@ -2164,8 +2170,16 @@ class EditorApp:
 
     def refresh_feature_list(self):
         t = self.feat_tree
-        t.delete(*t.get_children())
         f = self.features()
+        key = (id(f), tuple((s["id"], s.get("brush"), s["kind"], tuple(map(tuple, s["points"])))
+                            for s in f.strokes)) if f is not None else None
+        if key == getattr(self, "_feat_list_key", None) and key is not None:
+            if self.feature_sel is not None and f.stroke(self.feature_sel) is None:
+                self.feature_sel = None
+            self.sync_feature_list()
+            return
+        self._feat_list_key = key
+        t.delete(*t.get_children())
         if f is not None:
             for s in f.strokes:
                 size = f"{length(s['points']):.0f} m" if len(s["points"]) > 1 else "point"
@@ -2286,22 +2300,26 @@ class EditorApp:
             self.status(f"Terrain feature #{st['id']} drawn: {name}, {what}." + self.ai_note(st), "ok")
 
     def draw_stroke_shape(self, pts, b, col, chosen, tag):
-        """A stroke on the map: its width (hatched) and centre line, or a circle
-        for one point; chosen: thicker, with its points as handles."""
+        """A stroke on the map: its width (dashed outline) and centre line, or a
+        circle for one point; chosen: thicker, with its points as handles.
+        Zoomed out, an unchosen stroke is one canvas item (a plain line or
+        circle), so many features stay quick to draw."""
         c = self.canvas
         wpx = b["width"] * self.view.scale
+        detail = chosen or wpx >= 6
         if len(pts) > 1:
             flat = [q for p in pts for q in p]
-            if chosen or wpx >= 6:
+            if detail:
                 c.create_polygon(*outline_polygon(pts, max(1.0, wpx / 2)), fill="", outline=col, dash=(4, 3),
                                  tags=tag)
-            c.create_line(*flat, fill="#000000", width=4 if chosen else 3, tags=tag)
-            c.create_line(*flat, fill=col, width=2 if chosen else 1, tags=tag)
+                c.create_line(*flat, fill="#000000", width=4 if chosen else 3, tags=tag)
+            c.create_line(*flat, fill=col, width=2 if chosen or not detail else 1, tags=tag)
         elif pts:
             x, y = pts[0]
             r = max(3.0, wpx / 2)
-            c.create_oval(x - r, y - r, x + r, y + r, outline="#000000", width=4 if chosen else 3, tags=tag)
-            c.create_oval(x - r, y - r, x + r, y + r, outline=col, width=2 if chosen else 1, tags=tag)
+            if detail:
+                c.create_oval(x - r, y - r, x + r, y + r, outline="#000000", width=4 if chosen else 3, tags=tag)
+            c.create_oval(x - r, y - r, x + r, y + r, outline=col, width=2 if chosen or not detail else 1, tags=tag)
         if chosen:
             for x, y in pts:
                 c.create_rectangle(x - 4, y - 4, x + 4, y + 4, fill="#FFFFFF", outline="#000000", tags=tag)
@@ -2311,7 +2329,12 @@ class EditorApp:
         if f is None or not self.layer("Terrain") or not self.layer("Features"):
             return
         v = self.view
+        x0, z1 = v.s2w(0, 0)
+        x1, z0 = v.s2w(v.w, v.h)
         for s in f.strokes:
+            b = feature_bbox(s)
+            if b[0] > x1 or b[2] < x0 or b[1] > z1 or b[3] < z0:
+                continue
             pts = [v.w2s(x, z) for x, z in s["points"]]
             self.draw_stroke_shape(pts, s, self.brush_colour(s), s["id"] == self.feature_sel, "overlay")
 
@@ -2325,7 +2348,11 @@ class EditorApp:
         p = self.view.s2w(sx, sy)
         tol = 6.0 / max(self.view.scale, 1e-6)
         for s in reversed(f.strokes):
-            if line_distance(p, s["points"])[0] <= max(s["width"] / 2, tol):
+            reach = max(s["width"] / 2, tol)
+            b = feature_bbox(s, reach)
+            if not (b[0] <= p[0] <= b[2] and b[1] <= p[1] <= b[3]):
+                continue
+            if line_distance(p, s["points"])[0] <= reach:
                 return s["id"]
         return None
 

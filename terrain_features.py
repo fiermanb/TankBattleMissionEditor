@@ -155,13 +155,24 @@ def line_distance(p, points):
 
 
 def bbox(s, extra=None):
-    p = np.asarray(s["points"], dtype=float)
+    """World box (x0, z0, x1, z1) of the stroke's points widened by its reach
+    (or by `extra`)."""
+    xs = [p[0] for p in s["points"]]
+    zs = [p[1] for p in s["points"]]
     r = reach(s) if extra is None else extra
-    return p[:, 0].min() - r, p[:, 1].min() - r, p[:, 0].max() + r, p[:, 1].max() + r
+    return min(xs) - r, min(zs) - r, max(xs) + r, max(zs) + r
 
 
 def _overlaps(a, b):
     return a[0] <= b[2] and b[0] <= a[2] and a[1] <= b[3] and b[1] <= a[3]
+
+
+def _window(box, xs, zs):
+    """(row0, row1, col0, col1) of the grid with world columns xs and rows zs
+    (ascending) inside the world box (x0, z0, x1, z1), or None."""
+    c0, c1 = np.searchsorted(xs, box[0]), np.searchsorted(xs, box[2], side="right")
+    r0, r1 = np.searchsorted(zs, box[1]), np.searchsorted(zs, box[3], side="right")
+    return (int(r0), int(r1), int(c0), int(c1)) if r0 < r1 and c0 < c1 else None
 
 
 def distance_field(points, xs, zs, limit):
@@ -266,7 +277,8 @@ class TerrainFeatures:
 
     def heights_block(self, r0, r1, c0, c1):
         """Heightmap values (int32) of rows r0:r1 and columns c0:c1 computed from
-        the base and all strokes."""
+        the base and all strokes. Each stroke is computed on the part of the
+        block within its reach only."""
         res = self.base.shape[0]
         cell = self.size[0] / (res - 1)
         xs_all, zs_all = self._cells(res)
@@ -286,42 +298,55 @@ class TerrainFeatures:
         for s in touching:
             if s["kind"] not in ("level", "smooth"):
                 continue
-            d, _, _ = distance_field(s["points"], xs, zs, reach(s))
+            sub = _window(bbox(s), xs, zs)
+            if sub is None:
+                continue
+            a0, a1, b0, b1 = sub
+            d, _, _ = distance_field(s["points"], xs[b0:b1], zs[a0:a1], reach(s))
             near = np.isfinite(d)
             if not near.any():
                 continue
             w, sl = half_width(s), math.tan(math.radians(s["slope"]))
+            part = g[a0:a1, b0:b1]
             if s["kind"] == "level":
                 target = s["level"] - self.origin[1]
             else:
-                target = box_blur(g, self._blur_k(s, cell))
+                k = self._blur_k(s, cell)
+                p = 2 * k + 2
+                A0, B0 = max(0, a0 - p), max(0, b0 - p)
+                big = box_blur(g[A0:a1 + p, B0:b1 + p], k)
+                target = big[a0 - A0:a1 - A0, b0 - B0:b1 - B0]
             lim = np.maximum(np.where(near, d, 0.0) - w, 0.0) * sl
-            g = np.where(near, np.clip(g, target - lim, target + lim), g)
+            g[a0:a1, b0:b1] = np.where(near, np.clip(part, target - lim, target + lim), part)
         raised = np.zeros_like(g)
         cut = np.zeros_like(g)
         rims = np.zeros_like(g)
         for s in touching:
             if s["kind"] != "shape" or s["height"] == 0:
                 continue
-            d, t, total = distance_field(s["points"], xs, zs, reach(s))
+            sub = _window(bbox(s), xs, zs)
+            if sub is None:
+                continue
+            a0, a1, b0, b1 = sub
+            d, t, total = distance_field(s["points"], xs[b0:b1], zs[a0:a1], reach(s))
             if not np.isfinite(d).any():
                 continue
             w, sl = half_width(s), math.tan(math.radians(s["slope"]))
             prof = np.clip((w - d) * sl, 0.0, abs(s["height"]))
             if s["height"] > 0:
-                np.maximum(raised, prof, out=raised)
+                np.maximum(raised[a0:a1, b0:b1], prof, out=raised[a0:a1, b0:b1])
                 continue
             gap = s["crossings"]
             if gap > 0 and total >= gap / 2:
                 centres = np.arange(gap / 2, total, gap)
                 dc = np.abs(t[..., None] - centres).min(-1)
                 prof = np.minimum(prof, np.clip((dc - CROSSING_WIDTH / 2) * sl, 0.0, None))
-            np.minimum(cut, -prof, out=cut)
+            np.minimum(cut[a0:a1, b0:b1], -prof, out=cut[a0:a1, b0:b1])
             if s["rim"] > 0:
                 rb = rim_band(s["rim"])
                 x = (d - w) / (2 * rb)
                 bump = np.where((x > 0) & (x < 1), s["rim"] * np.sin(np.pi * np.clip(x, 0, 1)), 0.0)
-                np.maximum(rims, bump, out=rims)
+                np.maximum(rims[a0:a1, b0:b1], bump, out=rims[a0:a1, b0:b1])
         g = g + raised + np.where(cut < 0, cut, rims)
         g = g[r0 - R0:r1 - R0, c0 - C0:c1 - C0]
         return np.clip(np.round(g / unit), 0, HEIGHT_MAX).astype(np.int32)
@@ -338,7 +363,6 @@ class TerrainFeatures:
         xs = self.origin[0] + (np.arange(c0, c1) + 0.5) * self.size[0] / res
         zs = self.origin[2] + (np.arange(r0, r1) + 0.5) * self.size[1] / res
         base = np.concatenate([a[r0:r1, c0:c1] for a in self.base_alphas], axis=2)
-        wbox = (xs[0], zs[0], xs[-1], zs[-1])
         w = base.astype(np.float64)
         touched = np.zeros(base.shape[:2], dtype=bool)
         for s in self.strokes:
@@ -346,16 +370,19 @@ class TerrainFeatures:
             if tex is None or not 0 <= tex < n:
                 continue
             half, edge = texture_reach(s)
-            if not _overlaps(bbox(s, half + edge), wbox):
+            sub = _window(bbox(s, half + edge), xs, zs)
+            if sub is None:
                 continue
-            d, _, _ = distance_field(s["points"], xs, zs, half + edge)
+            a0, a1, b0, b1 = sub
+            d, _, _ = distance_field(s["points"], xs[b0:b1], zs[a0:a1], half + edge)
             f = np.clip((half + edge / 2 - d) / edge, 0.0, 1.0)
             hit = f > 0
             if not hit.any():
                 continue
-            w *= (1.0 - f)[..., None]
-            w[..., tex] += 255.0 * f
-            touched |= hit
+            part = w[a0:a1, b0:b1]
+            part *= (1.0 - f)[..., None]
+            part[..., tex] += 255.0 * f
+            touched[a0:a1, b0:b1] |= hit
         out = base.copy()
         if touched.any():
             v = w[touched]
