@@ -1305,7 +1305,7 @@ class EditorApp:
         menu("Selection", [("Events list...", self.pick_event, "L", "events"),
                            ("Next spawn", lambda: self.next_spawn(1), "Tab", "nextspawn"),
                            ("Select parent", self.select_parent, "P", "parent"),
-                           ("Clear selection", lambda: self.select(None), "Esc")])
+                           ("Clear selection", self.clear_selection, "Esc", "clearsel")])
         menu("Insert", [("Object...", self.add_object, "", "addobj"),
                         ("Hostile tank", lambda: self.use_template(("spawn", 1)), "", "addhost"),
                         ("Friendly tank", lambda: self.use_template(("spawn", 0)), "", "addfriend"), None,
@@ -1525,6 +1525,7 @@ class EditorApp:
                            ("delete", "Delete (Del)", self.delete_selected),
                            None, ("undo", "Undo (Ctrl+Z)", self.undo)])
         block("Tools", [("select", "Select / move", lambda: self.set_tool("select"), "select"),
+                        ("clearsel", "Clear selection (Esc)", self.clear_selection),
                         ("pan", "Pan", lambda: self.set_tool("pan"), "pan"),
                         ("zoomin", "Zoom in (click or drag a box)", lambda: self.set_tool("zoomin"), "zoomin"),
                         ("zoomout", "Zoom out (click)", lambda: self.set_tool("zoomout"), "zoomout"),
@@ -4865,6 +4866,14 @@ class EditorApp:
         self.sync_table_selection()
         self.request_render()
 
+    def clear_selection(self):
+        """Deselect all objects and the selected terrain feature."""
+        if not self.model:
+            return
+        self.clear_feature_choice()
+        self.select(None)
+        self.status("Selection cleared.")
+
     def select_parent(self):
         if not self.model or self.selected is None:
             return
@@ -5040,8 +5049,8 @@ class EditorApp:
         m, v = self.model, self.view
         x0, y0 = d["start"]
         if abs(x1 - x0) < 4 and abs(y1 - y0) < 4:
-            if d["sel_mode"] == "replace" and self.sel:
-                self.select(None)
+            if d["sel_mode"] == "replace" and (self.sel or self.feature_sel is not None):
+                self.clear_selection()
             return
         lx, hx, ly, hy = min(x0, x1), max(x0, x1), min(y0, y1), max(y0, y1)
 
@@ -5203,6 +5212,8 @@ class EditorApp:
                    ("Rotate right", lambda: self.rotate_selected(1), "E", "rotr", has_sel), None,
                    ("Select parent", self.select_parent, "P", "parent", self.selected is not None),
                    ("Select all", self.select_all, "Ctrl+A", None, True),
+                   ("Clear selection", self.clear_selection, "Esc", "clearsel",
+                    bool(self.sel) or self.feature_sel is not None),
                    ("Zoom to selection", self.frame_selection, "F", "zoomsel", bool(self.sel))]
         for en in entries:
             if en is None:
@@ -5268,6 +5279,8 @@ class EditorApp:
             menu.add_command(label="Remove point", command=lambda: self.remove_feature_point(s["id"], i),
                              state="normal" if i is not None and len(s["points"]) > 1 else "disabled")
             menu.add_command(label="Delete terrain feature", command=self.delete_feature, accelerator="Del")
+            menu.add_command(label="Clear selection", command=self.clear_selection, compound="left",
+                             image=self.image("clearsel"))
             menu.add_command(label="Zoom to terrain feature", command=lambda: self.frame_feature(s["id"]))
         try:
             menu.tk_popup(e.x_root, e.y_root)
@@ -5352,7 +5365,7 @@ class EditorApp:
             elif self.tool != "select":
                 self.stop_tool()
             else:
-                self.select(None)
+                self.clear_selection()
         elif k == "w":
             if self.mouse is not None:
                 self.add_waypoint(self.view.s2w(*self.mouse))

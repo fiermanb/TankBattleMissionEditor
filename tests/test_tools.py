@@ -208,6 +208,17 @@ class ToolTest(unittest.TestCase):
         self.assertAlmostEqual(m.ground(x, z), g0, places=3, msg="undo restores the ground")
         app.set_tool("select")
 
+    def test_clear_selection(self):
+        app, m = self.app, self.app.model
+        go = m.event_go[m.spawns[0]]
+        app.select(go)
+        self.assertEqual(app.sel, [go])
+        app.feature_sel = 99
+        app.clear_selection()
+        self.assertEqual(app.sel, [])
+        self.assertIsNone(app.feature_sel, "a selected terrain feature is cleared too")
+        self.assertIn("clearsel", app._images, "the toolbar button has its icon")
+
     def test_catalog_menu(self):
         app = self.app
         actions = {label: enabled for label, _, enabled in app.catalog_actions(f"s{SCENE}")}

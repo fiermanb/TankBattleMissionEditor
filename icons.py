@@ -67,6 +67,15 @@ def draw(name):
     elif name == "select":
         d.polygon([(14, 4), (14, 50), (25, 39), (34, 58), (42, 54), (33, 36), (48, 36)], fill=WHITE, outline=BLACK)
         d.line([(14, 4), (14, 50), (25, 39), (34, 58), (42, 54), (33, 36), (48, 36), (14, 4)], fill=BLACK, width=3)
+    elif name == "clearsel":
+        for x0, y0, x1, y1 in ((6, 10, 50, 10), (50, 10, 50, 54), (50, 54, 6, 54), (6, 54, 6, 10)):
+            n = 6
+            for i in range(n):
+                if i % 2 == 0:
+                    d.line((x0 + (x1 - x0) * i / n, y0 + (y1 - y0) * i / n,
+                            x0 + (x1 - x0) * (i + 1) / n, y0 + (y1 - y0) * (i + 1) / n), fill=BLACK, width=4)
+        d.line((30, 30, 60, 60), fill=RED, width=9)
+        d.line((60, 30, 30, 60), fill=RED, width=9)
     elif name == "pan":
         d.line((32, 6, 32, 58), fill=BLACK, width=6)
         d.line((6, 32, 58, 32), fill=BLACK, width=6)
