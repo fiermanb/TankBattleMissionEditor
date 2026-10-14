@@ -73,6 +73,19 @@ class BriefingSyncTest(unittest.TestCase):
             self.assertEqual(placed, wanted, k)
         self.assertIn("Scouts", rows)
         self.assertIn(key, rows)
+        # every enemy in new groups: the rows they are copied from are hidden by the same update
+        battle.begin("regroup")
+        for i, e in enumerate(e for e in battle.spawns if battle.sc.read(e)["Relationship"] == 1):
+            battle.set_field(e, "Key_Name", "Raiders" if i % 2 else "Snipers")
+        battle.commit()
+        battle.save()
+        battle = SceneModel(ctx, battle_idx, terrain=None)
+        sync_mission(ctx, mgr, battle, os.path.join(tmp, "backups"))
+        sync = BriefingSync(ctx, menu_idx)
+        rows = sync.rows()
+        for k in ("Raiders", "Snipers"):
+            self.assertTrue(sync.menu.active(rows[k][0]), k)
+        self.assertFalse(sync.menu.active(rows["Scouts"][0]))
         mission = mgr.mission_for_scene(ctx.scene_label(battle_idx))[1]
         friends = sum(1 for e in battle.spawns if battle.sc.read(e)["Relationship"] == 0
                       and battle.sc.read(e)["Tank_ID"] != 1 and battle.active(battle.event_go[e]))

@@ -140,7 +140,7 @@ class BriefingSync:
             sides = {key: self.row_side(key, el) for key, (row, el) in rows.items()}
             template_row = {}
             template_symbol = {}
-            for key, (row, el) in rows.items():
+            for key, (row, el) in sorted(rows.items(), key=lambda kv: not m.go[kv[1][0]]["m_IsActive"]):
                 template_row.setdefault(sides[key], (row, el))
                 syms = self.symbol_gos(el)
                 if syms:
@@ -165,6 +165,7 @@ class BriefingSync:
                         self.report.append(f"Group '{key}' could not be added: the briefing has no rows.")
                         continue
                     row = m.duplicate(tpl[0], offset=None)
+                    self.set_active(row, True)
                     el = next(iter(self.comps_of(row, cls=ELEMENT)))
                     m.rename(row, f"Text (Key Name) ({key})")
                     current = []
