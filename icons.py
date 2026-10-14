@@ -209,6 +209,16 @@ def draw(name):
     elif name == "tbrush":
         d.line((52, 6, 26, 36), fill=(150, 100, 50, 255), width=8)
         d.polygon([(22, 32), (32, 42), (22, 56), (6, 58), (10, 44)], fill=(60, 140, 60, 255), outline=BLACK)
+    elif name == "tdraw":
+        d.polygon([(2, 62), (2, 42), (62, 42), (62, 62)], fill=(150, 120, 80, 255), outline=BLACK)
+        d.polygon([(10, 42), (16, 54), (30, 54), (36, 42)], fill=(90, 60, 30, 255), outline=BLACK)
+        d.line((56, 4, 30, 34), fill=(230, 190, 60, 255), width=9)
+        d.polygon([(26, 30), (34, 38), (22, 44)], fill=BLACK)
+    elif name == "tvertex":
+        pts = [(6, 52), (24, 18), (42, 40), (58, 10)]
+        d.line(pts, fill=(139, 69, 19, 255), width=7)
+        for x, y in pts:
+            d.rectangle((x - 6, y - 6, x + 6, y + 6), fill=WHITE, outline=BLACK, width=2)
     elif name in ("traise", "tlower", "tflatten", "tsmooth"):
         ground = [(2, 62), (2, 50), (16, 44), (32, 40), (48, 44), (62, 50), (62, 62)]
         if name == "tflatten":

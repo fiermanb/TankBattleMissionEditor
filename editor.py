@@ -33,7 +33,9 @@ from version import APP_NAME, COPYRIGHT, __version__
 from briefing_sync import sync_mission
 from scenario_backup import EXCHANGE_SUFFIX, ScenarioBackups
 from navmesh_edit import NavMesh, decode_tile
-from terrain_edit import FALLOFFS, TerrainPaint
+from terrain_edit import TerrainPaint
+from terrain_features import (AI_MAX_SLOPE, FEATURES_FILE, KIND_NAMES, KINDS, TerrainFeatures, clean_brush,
+                              default_brushes, find_layer, layer_label, length, line_distance)
 from object_import import ObjectLibrary, base_name, category, import_object, reconnect_event_refs
 from scenarios import ScenarioManager
 from scene_io import GameContext
@@ -100,6 +102,7 @@ TOC_LAYERS = [
     ("Scenery", "Scenery", None, None, None),
 ] + [(cat, cat, "square", col, "Scenery") for cat, col in CATEGORY_COLOURS.items()] + [
     ("Terrain", "Terrain", "terrain", None, None),
+    ("Features", "Terrain features", "route", (139, 69, 19), "Terrain"),
     ("Elevation", "Elevation tint", "elevation", None, "Terrain"),
     ("NavMesh", "AI route map", "navmesh", None, "Terrain"),
     ("Contours", "Contour lines", "contour", None, "Terrain"),
@@ -114,23 +117,28 @@ EVENT_MARK = 18
 
 TOOLS = ("select", "pan", "zoomin", "zoomout", "rotate")
 TOOL_CURSORS = {"select": "arrow", "pan": "hand2", "zoomin": "crosshair", "zoomout": "crosshair",
-                "rotate": "exchange", "texture": "spraycan", "raise": "sb_up_arrow", "lower": "sb_down_arrow",
-                "flatten": "sb_h_double_arrow", "smooth": "circle", "add": "plus"}
-BRUSH_COLOURS = {"texture": "#2E9E3E", "raise": "#D2691E", "lower": "#2F6FD0", "flatten": "#B8A000",
-                 "smooth": "#9050C0"}
+                "rotate": "exchange", "feature": "pencil", "vertex": "tcross", "add": "plus"}
+FEATURE_COLOURS = {"cut": "#8B4513", "raise": "#D2691E", "level": "#B8A000", "smooth": "#9050C0",
+                   "paint": "#2E9E3E"}
 MESSAGE_COLOURS = {None: ("#DCEAF8", "#7FA7D6"), "ok": ("#DFF0D8", "#79B26B"),
                    "warn": ("#FCF3CF", "#D2B03C")}
 MESSAGE_MS = {None: 5000, "ok": 5000, "warn": 10000}
 ADD_BUTTONS = {("spawn", 1): "add:hostile", ("spawn", 0): "add:friendly", ("route",): "add:route",
                ("waypoint",): "add:waypoint"}
 TOOL_NAMES = {"select": "Select / move", "pan": "Pan", "zoomin": "Zoom in", "zoomout": "Zoom out",
-              "rotate": "Rotate", "texture": "Terrain texture", "raise": "Raise terrain", "lower": "Lower terrain",
-              "flatten": "Flatten terrain", "smooth": "Smooth terrain", "add": "Add"}
-TERRAIN_TOOLS = ("texture", "raise", "lower", "flatten", "smooth")
-PAINT_DAB_STRENGTH = 0.35
-SHAPE_DAB_STRENGTH = 0.5
-PAINT_REPEAT_MS = 80
-FALLOFF_NAMES = {"smooth": "Smooth", "linear": "Linear", "hard": "Hard"}
+              "rotate": "Rotate", "feature": "Draw terrain", "vertex": "Edit terrain features", "add": "Add"}
+TERRAIN_TOOLS = ("feature", "vertex")
+FREEHAND_PX = 6
+BRUSH_PARAMS = (("width", "Width", "m", "Width at ground level"),
+                ("height", "Height", "m", "Change of the ground: negative cuts, positive raises"),
+                ("slope", "Side slope", "deg", "Steepness of the sides (90 = vertical)"),
+                ("rim", "Rim", "m", "Height of the spoil along the edges of a cut"),
+                ("crossings", "AI crossings every", "m", "Undug crossings left for the AI along a cut; 0 = none"),
+                ("level", "Level to", "m", "Height in metres; empty: the ground at the first point"))
+KIND_PARAMS = {"shape": ("width", "height", "slope", "rim", "crossings", "texture"),
+               "level": ("width", "slope", "level", "texture"),
+               "smooth": ("width", "slope", "texture"),
+               "paint": ("width", "texture")}
 
 SPAWN_FIELDS = [
     ("Side", "Relationship", RELATIONSHIPS),
@@ -705,6 +713,46 @@ class PlayerTankDialog(Dialog):
         return result
 
 
+def outline_polygon(pts, r):
+    """Flat list of screen coordinates around the polyline `pts` at distance r
+    (mitred corners, the miter limited to 3 r)."""
+    p = np.asarray(pts, dtype=float)
+    d = np.diff(p, axis=0)
+    n = np.stack([-d[:, 1], d[:, 0]], axis=1) / np.maximum(np.hypot(d[:, 0], d[:, 1]), 1e-9)[:, None]
+    normals = [n[0]] + [a + b for a, b in zip(n[:-1], n[1:])] + [n[-1]]
+    side = []
+    for i, v in enumerate(normals):
+        ref = n[min(i, len(n) - 1)]
+        k = float(np.dot(v, ref))
+        v = v / k if abs(k) > 1e-9 else ref
+        length = float(np.hypot(*v))
+        if length > 3:
+            v = v * 3 / length
+        side.append(v * r)
+    left = [p[i] + side[i] for i in range(len(p))]
+    right = [p[i] - side[i] for i in range(len(p))]
+    return [float(q) for pt in left + right[::-1] for q in pt]
+
+
+class NameDialog(Dialog):
+    """Ask for a name."""
+
+    def __init__(self, parent, title, prompt, value=""):
+        super().__init__(parent, title)
+        tk.Label(self.body, text=prompt, anchor="w").pack(fill="x")
+        self.var = tk.StringVar(value=value)
+        ent = ttk.Entry(self.body, textvariable=self.var, width=40)
+        ent.pack(fill="x", pady=(4, 0))
+        ent.select_range(0, "end")
+        ent.focus_set()
+
+    def collect(self):
+        name = self.var.get().strip()
+        if not name:
+            raise ValueError("The name is empty.")
+        return name
+
+
 class GameFolderDialog(Dialog):
     """Choose the installed game (Steam) folder."""
 
@@ -782,7 +830,6 @@ class EditorApp:
         self._terrain_view = (None, None)
         self._navmesh_view = (None, None)
         self._contour_interval = None
-        self._paint_timer = None
         self.auto_library = auto_library
         self._lib_job = None
         self.view = View()
@@ -1295,8 +1342,11 @@ class EditorApp:
             "Events: Insert > Event... creates a new event or copies one. An event starts on a timer, when "
             "tanks are destroyed, or when tanks enter a trigger area; it can enable or cancel other events. "
             "Trigger areas: set their size and the tanks that count in Properties.\n"
-            "Terrain (custom scenarios): Texture, Raise, Lower, Flatten and Smooth; drag on the map. The "
-            "Terrain tab holds the ground layers and the brush options. Saving rebuilds the AI route map "
+            "Terrain (custom scenarios): choose a brush on the Terrain tab (trench, tank pit, road and "
+            "others, or your own), then draw with Draw terrain: click points or drag; right-click, "
+            "double-click or Enter finishes, one point places a single stamp. A brush gives the same result "
+            "however often it is drawn over a place. Edit terrain features selects a drawn feature to move it, "
+            "move its points or delete it; Properties change its parameters. Saving rebuilds the AI route map "
             "when terrain or objects changed, so AI tanks drive around them (also Scenario > Rebuild AI route "
             "map).\n\n"
             "Table Of Contents: a check box shows or hides a layer; double-click opens its table; right-click "
@@ -1490,12 +1540,10 @@ class EditorApp:
                           "add:route"),
                          ("addevent", "Add event...", self.add_event), None,
                          ("newscen", "New scenario...", self.new_scenario)])
-        block("Terrain", [("tbrush", "Texture: paint the ground layer chosen on the Terrain tab",
-                           lambda: self.set_terrain_tool("texture"), "texture"),
-                          ("traise", "Raise the ground", lambda: self.set_terrain_tool("raise"), "raise"),
-                          ("tlower", "Lower the ground", lambda: self.set_terrain_tool("lower"), "lower"),
-                          ("tflatten", "Flatten the ground", lambda: self.set_terrain_tool("flatten"), "flatten"),
-                          ("tsmooth", "Smooth the ground", lambda: self.set_terrain_tool("smooth"), "smooth")])
+        block("Terrain", [("tdraw", "Draw terrain: draw with the brush chosen on the Terrain tab",
+                           lambda: self.set_terrain_tool("feature"), "feature"),
+                          ("tvertex", "Edit terrain features: select a feature, move its points or the whole "
+                           "feature", lambda: self.set_terrain_tool("vertex"), "vertex")])
         block("Game", [("play", "Start the game (F5)", self.start_game)])
 
     def build_toc(self, body):
@@ -1742,68 +1790,240 @@ class EditorApp:
         self.obj_templates = {}
 
     def build_terrain_page(self, body):
+        """Terrain tab: the brushes, the parameters of the chosen brush and the
+        terrain features of the open scenario."""
+        tk.Label(body, text="Brushes", font=UI_BOLD, anchor="w").pack(side="top", fill="x", padx=4, pady=(4, 0))
+        holder = bordered(body)
+        holder.pack(side="top", fill="x", padx=2, pady=2)
+        self.brush_tree = ttk.Treeview(holder, show="tree", selectmode="browse", height=8)
+        sb = ttk.Scrollbar(holder, command=self.brush_tree.yview)
+        self.brush_tree.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        self.brush_tree.pack(side="left", fill="both", expand=True)
+        self.brush_tree.bind("<<TreeviewSelect>>", lambda e: self.on_brush_select())
+        form = tk.Frame(body)
+        form.pack(side="top", fill="x", padx=4, pady=2)
+        self.brush_widgets, self.brush_vars = {}, {}
+        tk.Label(form, text="Kind:", anchor="w").grid(row=0, column=0, sticky="w")
+        cb = ttk.Combobox(form, state="readonly", width=18, values=[KIND_NAMES[k] for k in KINDS])
+        cb.grid(row=0, column=1, columnspan=2, sticky="w", padx=4, pady=1)
+        cb.bind("<<ComboboxSelected>>", lambda e: self.on_brush_param())
+        self.brush_widgets["kind"] = cb
+        for r, (key, text, unit, tip) in enumerate(BRUSH_PARAMS, start=1):
+            tk.Label(form, text=text + ":", anchor="w").grid(row=r, column=0, sticky="w")
+            var = tk.StringVar()
+            ent = ttk.Entry(form, textvariable=var, width=8)
+            ent.grid(row=r, column=1, sticky="w", padx=4, pady=1)
+            ent.bind("<Return>", lambda e: self.on_brush_param())
+            ent.bind("<FocusOut>", lambda e: self.on_brush_param())
+            ToolTip(ent, tip)
+            tk.Label(form, text=unit, anchor="w").grid(row=r, column=2, sticky="w")
+            self.brush_vars[key], self.brush_widgets[key] = var, ent
+        r = len(BRUSH_PARAMS) + 1
+        tk.Label(form, text="Texture:", anchor="w").grid(row=r, column=0, sticky="w")
+        tex = ttk.Combobox(form, state="readonly", width=18, values=["(none)"])
+        tex.grid(row=r, column=1, columnspan=2, sticky="w", padx=4, pady=1)
+        tex.bind("<<ComboboxSelected>>", lambda e: self.on_brush_param())
+        ToolTip(tex, "Ground texture painted under the brush")
+        self.brush_widgets["texture"] = tex
+        form.columnconfigure(2, weight=1)
+        bar = tk.Frame(body)
+        bar.pack(side="top", fill="x", padx=4, pady=(2, 4))
+        ttk.Button(bar, text="Save as new brush...", command=self.save_brush_as).pack(side="left")
+        self.brush_del_btn = ttk.Button(bar, text="Delete brush", command=self.delete_brush)
+        self.brush_del_btn.pack(side="left", padx=(4, 0))
+        tk.Label(body, text="Features in this scenario", font=UI_BOLD, anchor="w").pack(
+            side="top", fill="x", padx=4, pady=(6, 0))
         holder = bordered(body)
         holder.pack(side="top", fill="both", expand=True, padx=2, pady=2)
-        self.terr_layers = ttk.Treeview(holder, show="tree", selectmode="browse", height=8)
-        self.terr_layers.pack(fill="both", expand=True)
-        form = tk.Frame(body)
-        form.pack(side="top", fill="x", padx=4, pady=4)
-        self.brush_size = tk.DoubleVar(value=10.0)
-        self.brush_strength = tk.DoubleVar(value=50.0)
-        self.brush_step = tk.DoubleVar(value=0.5)
-        rows = (("Size", self.brush_size, 1, 100, " m", "{:.0f}", "Brush radius"),
-                ("Strength", self.brush_strength, 1, 100, " %", "{:.0f}", "How much one brush dab changes"),
-                ("Height step", self.brush_step, 0.05, 5, " m", "{:.2f}",
-                 "Raise / Lower: metres per dab at full strength"))
-        for r, (text, var, lo, hi, unit, fmt, tip) in enumerate(rows):
-            tk.Label(form, text=text + ":", anchor="w").grid(row=r, column=0, sticky="w")
-            scale = ttk.Scale(form, from_=lo, to=hi, variable=var, orient="horizontal")
-            scale.grid(row=r, column=1, sticky="ew", padx=4)
-            ToolTip(scale, tip)
-            lbl = tk.Label(form, width=7, anchor="e")
-            lbl.grid(row=r, column=2, sticky="e")
+        self.feat_tree = ttk.Treeview(holder, columns=("size",), show="tree headings", selectmode="browse",
+                                      height=6)
+        self.feat_tree.heading("#0", text="Feature", anchor="w")
+        self.feat_tree.heading("size", text="Length", anchor="w")
+        self.feat_tree.column("#0", width=150, stretch=True)
+        self.feat_tree.column("size", width=70, stretch=False)
+        sb = ttk.Scrollbar(holder, command=self.feat_tree.yview)
+        self.feat_tree.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        self.feat_tree.pack(side="left", fill="both", expand=True)
+        self.feat_tree.bind("<<TreeviewSelect>>", lambda e: self.on_feature_list_select())
+        self.feat_tree.bind("<Double-Button-1>", lambda e: self.frame_feature(self.feature_sel))
+        self._feat_sync = self._brush_sync = False
+        self.feature_sel = None
+        self._vertex_click = None
+        self._tex_values = [""]
+        self.load_brushes()
 
-            def show(*_a, v=var, lb=lbl, u=unit, f=fmt):
-                lb.config(text=f.format(v.get()) + u)
-            var.trace_add("write", show)
-            show()
-        r = len(rows)
-        tk.Label(form, text="Falloff:", anchor="w").grid(row=r, column=0, sticky="w", pady=(4, 0))
-        self.brush_falloff = ttk.Combobox(form, state="readonly", width=10,
-                                          values=[FALLOFF_NAMES[k] for k in FALLOFFS])
-        self.brush_falloff.current(0)
-        self.brush_falloff.grid(row=r, column=1, sticky="w", padx=4, pady=(4, 0))
-        ToolTip(self.brush_falloff, "Smooth: soft edge; Linear: even slope; Hard: full effect up to the edge")
-        tk.Label(form, text="Flatten to:", anchor="w").grid(row=r + 1, column=0, sticky="w", pady=(4, 0))
-        fl = tk.Frame(form)
-        fl.grid(row=r + 1, column=1, columnspan=2, sticky="w", padx=4, pady=(4, 0))
-        self.flatten_height = tk.StringVar(value="")
-        ent = ttk.Entry(fl, textvariable=self.flatten_height, width=8)
-        ent.pack(side="left")
-        ToolTip(ent, "Height in metres; empty: the height where the stroke starts")
-        tk.Label(fl, text=" m").pack(side="left")
-        form.columnconfigure(1, weight=1)
-        self.terr_swatches = []
+    # ---- brushes ---------------------------------------------------------
+
+    def load_brushes(self):
+        """The built-in brushes and the user's own (settings.json "terrain_brushes")."""
+        own = []
+        for b in settings.load_settings().get("terrain_brushes", []):
+            try:
+                own.append(clean_brush(b))
+            except (ValueError, TypeError, AttributeError):
+                continue
+        self.own_brushes = own
+        self.builtin_brushes = default_brushes()
+        self.brush = dict(self.builtin_brushes[0])
+        self.brush_iid = "b0"
+        self.fill_brush_list()
+
+    def store_brushes(self):
+        data = settings.load_settings()
+        data["terrain_brushes"] = self.own_brushes
+        settings.save_settings(data)
+
+    def fill_brush_list(self):
+        t = self.brush_tree
+        t.delete(*t.get_children())
+        for i, b in enumerate(self.builtin_brushes):
+            t.insert("", "end", iid=f"b{i}", text=" " + b["name"])
+        for i, b in enumerate(self.own_brushes):
+            t.insert("", "end", iid=f"o{i}", text=f" {b['name']}  (own)")
+        if t.exists(self.brush_iid):
+            self._brush_sync = True
+            try:
+                t.selection_set(self.brush_iid)
+                t.see(self.brush_iid)
+                self.root.update_idletasks()
+            finally:
+                self._brush_sync = False
+        self.show_brush()
+
+    def on_brush_select(self):
+        """Choosing a brush chooses the Draw terrain tool (as a template in
+        ArcGIS Create Features)."""
+        if self._brush_sync:
+            return
+        sel = self.brush_tree.selection()
+        if not sel:
+            return
+        iid = sel[0]
+        src = self.builtin_brushes if iid[0] == "b" else self.own_brushes
+        self.brush = dict(src[int(iid[1:])])
+        self.brush_iid = iid
+        if iid[0] == "b":
+            self.brush_tree.item(iid, text=" " + self.brush["name"])
+        self.show_brush()
+        if self.model and self.can_paint():
+            self.set_tool("feature")
+
+    def layer_names(self):
+        m = self.model
+        return list(m.terrain.layer_names) if m and m.terrain is not None and m.terrain.layer_names else []
+
+    def show_brush(self):
+        """Show the chosen brush's parameters on the Terrain tab."""
+        b, w = self.brush, self.brush_widgets
+        w["kind"].current(KINDS.index(b["kind"]))
+        used = KIND_PARAMS[b["kind"]]
+        for key, *_ in BRUSH_PARAMS:
+            v = b.get(key)
+            self.brush_vars[key].set("" if v is None else f"{v:g}")
+            w[key].config(state="normal" if key in used else "disabled")
+        names = self.layer_names()
+        if names:
+            self._tex_values = [""] + [layer_label(n) for n in names]
+            idx = find_layer(names, b["texture"])
+            cur = 0 if idx is None else idx + 1
+        else:
+            self._tex_values = [""] + ([b["texture"]] if b["texture"] else [])
+            cur = len(self._tex_values) - 1
+        w["texture"].config(values=["(none)"] + self._tex_values[1:])
+        w["texture"].current(cur)
+        w["texture"].config(state="readonly" if "texture" in used else "disabled")
+        self.brush_del_btn.config(state="normal" if self.brush_iid.startswith("o") else "disabled")
+        if self.tool == "feature" and self.sketch is None:
+            self.status(self.tool_hint())
+
+    def on_brush_param(self):
+        """A parameter of the chosen brush changed on the Terrain tab. The
+        user's own brushes keep the change; a built-in brush keeps it until
+        another brush is chosen."""
+        b, w = dict(self.brush), self.brush_widgets
+        b["kind"] = KINDS[max(0, w["kind"].current())]
+        text = ""
+        try:
+            for key, *_ in BRUSH_PARAMS:
+                text = self.brush_vars[key].get().strip().replace(",", ".")
+                if key == "level":
+                    b[key] = float(text) if text else None
+                elif text:
+                    b[key] = float(text)
+            i = max(0, w["texture"].current())
+            b["texture"] = self._tex_values[i] if i < len(self._tex_values) else ""
+            new = clean_brush(b)
+        except ValueError:
+            self.status(f"Brush: '{text}' is not a number.", "warn")
+            self.show_brush()
+            return
+        if new == self.brush:
+            return
+        self.brush = new
+        if self.brush_iid.startswith("o"):
+            self.own_brushes[int(self.brush_iid[1:])] = dict(new)
+            self.store_brushes()
+        else:
+            self.brush_tree.item(self.brush_iid, text=f" {new['name']}  (changed)")
+        self.show_brush()
+
+    def save_brush_as(self):
+        name = NameDialog(self.root, "Save brush", "Name of the new brush:", self.brush.get("name", "")).run()
+        if not name:
+            return
+        taken = {b["name"].lower() for b in self.own_brushes + self.builtin_brushes}
+        base, n = name, 1
+        while name.lower() in taken:
+            n += 1
+            name = f"{base} ({n})"
+        self.own_brushes.append(dict(self.brush, name=name))
+        self.store_brushes()
+        self.brush = dict(self.own_brushes[-1])
+        self.brush_iid = f"o{len(self.own_brushes) - 1}"
+        self.fill_brush_list()
+        self.status(f"Brush '{name}' saved.", "ok")
+
+    def delete_brush(self):
+        if not self.brush_iid.startswith("o"):
+            return
+        i = int(self.brush_iid[1:])
+        name = self.own_brushes[i]["name"]
+        if not messagebox.askyesno("Delete brush", f"Delete the brush '{name}'?", parent=self.root):
+            return
+        del self.own_brushes[i]
+        self.store_brushes()
+        self.brush, self.brush_iid = dict(self.builtin_brushes[0]), "b0"
+        self.fill_brush_list()
+        self.status(f"Brush '{name}' deleted.")
+
+    @staticmethod
+    def brush_colour(b):
+        if b["kind"] == "shape":
+            return FEATURE_COLOURS["raise" if b["height"] > 0 else "cut"]
+        return FEATURE_COLOURS[b["kind"]]
+
+    def ai_note(self, b):
+        """Status text when a brush makes ground steeper than the AI can drive."""
+        steep = b["kind"] in ("shape", "level", "smooth") and b["slope"] > AI_MAX_SLOPE and \
+            (b["kind"] != "shape" or abs(b["height"]) > 0.3)
+        if not steep:
+            return ""
+        note = f" Its sides ({b['slope']:g} deg) are steeper than the AI can drive ({AI_MAX_SLOPE:g} deg)"
+        if b["kind"] == "shape" and b["height"] < 0 and b["crossings"] > 0:
+            return note + f"; AI crossings every {b['crossings']:g} m."
+        return note + "; AI tanks drive around it."
+
+    # ---- terrain features ------------------------------------------------
 
     def can_paint(self):
         m = self.model
         return bool(m and m.terrain is not None and m.terrain.layer_colours and m.index in self.custom_titles)
 
     def refresh_terrain_page(self):
-        t = self.terr_layers
-        sel = t.selection()
-        t.delete(*t.get_children())
-        self.terr_swatches = []
-        m = self.model
-        if m and m.terrain is not None:
-            for i, (name, col) in enumerate(zip(m.terrain.layer_names, m.terrain.layer_colours)):
-                img = ImageTk.PhotoImage(icons.swatch("square", tuple(int(c) for c in np.clip(col, 0, 255)),
-                                                      self.icon_size))
-                self.terr_swatches.append(img)
-                t.insert("", "end", iid=str(i), text=f" {name}", image=img)
-            keep = sel[0] if sel and t.exists(sel[0]) else ("0" if t.get_children() else None)
-            if keep:
-                t.selection_set(keep)
+        self.show_brush()
+        self.refresh_feature_list()
         if not self.can_paint() and self.tool in TERRAIN_TOOLS:
             self.set_tool("select")
 
@@ -1815,108 +2035,446 @@ class EditorApp:
         self.set_tool(tool)
         self.show_page("left", "terrain")
 
-    def paint_layer(self):
-        sel = self.terr_layers.selection()
-        return int(sel[0]) if sel else 0
-
-    def brush_shape(self):
-        return FALLOFFS[max(0, self.brush_falloff.current())]
-
-    def start_paint(self, e):
+    def scenario_entry(self):
+        """Scenario list entry of the open custom scenario, or None."""
         m = self.model
-        if not self.can_paint():
-            self.status("Terrain tools work on custom scenarios only.", "warn", banner=True)
-            return
+        if not m or not getattr(self, "scenarios", None):
+            return None
+        return next((s for s in self.scenarios.custom if s["battle_index"] == m.index), None)
+
+    def terrain_session(self):
+        """The open scenario's TerrainPaint (made on first use)."""
+        m = self.model
         if getattr(m, "terrain_paint", None) is None:
-            try:
-                m.terrain_paint = TerrainPaint(m)
-            except Exception as ex:
-                self.status(f"This terrain cannot be edited: {ex}", "warn", banner=True)
-                return
-        tp = m.terrain_paint
-        mode = self.tool
-        target = None
-        if mode == "flatten":
-            text = self.flatten_height.get().strip().replace(",", ".")
-            try:
-                target = tp.metres_to_value(float(text)) if text else None
-            except ValueError:
-                self.status(f"Flatten to: '{text}' is not a height in metres.", "warn", banner=True)
-                return
-        m.begin(TOOL_NAMES[mode])
+            m.terrain_paint = TerrainPaint(m)
+        return m.terrain_paint
+
+    def features(self, create=False):
+        """The open scenario's TerrainFeatures; create: start them on the
+        present ground when there are none yet."""
+        m = self.model
+        f = getattr(m, "terrain_features", None) if m else None
+        if f is None and create:
+            tp = self.terrain_session()
+            t = m.terrain
+            f = TerrainFeatures(tp.heights.copy(), [a.copy() for a in tp.alphas],
+                                {"origin": [float(v) for v in t.origin], "size": [t.size_x, t.size_z],
+                                 "height_scale": tp.height_scale})
+            m.terrain_features = f
+        return f
+
+    def load_terrain_features(self):
+        """Read the stored terrain features of the opened custom scenario."""
+        m = self.model
+        m.terrain_features = None
+        entry = self.scenario_entry()
+        if entry is None or not self.can_paint() or getattr(self, "backups", None) is None:
+            return
+        folder = self.backups.folder(entry["scene_id"])
+        if not os.path.exists(os.path.join(folder, FEATURES_FILE)):
+            return
         try:
-            made = tp.ensure_copy()
+            tp = self.terrain_session()
+            f, stale = TerrainFeatures.load(folder, tp.heights, tp.alphas)
+        except Exception as ex:
+            self.status(f"The terrain features of this scenario could not be loaded: {ex}", "warn", banner=True)
+            return
+        if stale:
+            TerrainFeatures.discard(folder)
+            self.status(f"The stored terrain features of this scenario were discarded: {stale}. The present "
+                        "ground is the starting point for new features.", "warn", banner=True)
+        m.terrain_features = f
+
+    def save_terrain_features(self):
+        """Store the terrain features with the saved scenario."""
+        m = self.model
+        f = getattr(m, "terrain_features", None)
+        entry = self.scenario_entry()
+        if f is None or not f.dirty or entry is None:
+            return
+        tp = m.terrain_paint
+        f.save(self.backups.folder(entry["scene_id"]), tp.heights, tp.alphas)
+
+    def own_terrain(self, tp):
+        """Inside begin/commit: give the scenario its own terrain copy; the first
+        copy is recorded in the scenario list."""
+        made = tp.ensure_copy()
+        entry = self.scenario_entry() if made else None
+        if entry is not None:
+            for s in self.scenarios.manifest["scenarios"]:
+                if s["scene_id"] == entry["scene_id"]:
+                    s["terrain_source"] = {"file": made[0], "pid": made[1],
+                                           "desc": self.backups.index.describe(made[0], made[1])}
+            self.scenarios._save_manifest()
+
+    def edit_features(self, label, strokes, changed):
+        """Replace the scenario's strokes by `strokes` and recompute the ground
+        that the `changed` strokes (old and new versions) cover, as one undo
+        step. Objects on the changed ground move with it."""
+        m = self.model
+        try:
+            tp = self.terrain_session()
+            f = self.features(create=True)
+        except Exception as ex:
+            self.status(f"This terrain cannot be edited: {ex}", "warn", banner=True)
+            return False
+        old = list(f.strokes)
+        before = tp.heights.copy()
+        m.begin(label)
+        try:
+            self.own_terrain(tp)
         except Exception as ex:
             m.commit()
             self.status(f"The terrain could not be copied for this scenario: {ex}", "warn", banner=True)
-            return
-        if made:
-            entry = next((s for s in self.scenarios.custom if s["battle_index"] == m.index), None)
-            if entry is not None:
-                for s in self.scenarios.manifest["scenarios"]:
-                    if s["scene_id"] == entry["scene_id"]:
-                        s["terrain_source"] = {"file": made[0], "pid": made[1],
-                                               "desc": self.backups.index.describe(made[0], made[1])}
-                self.scenarios._save_manifest()
-        wx, wz = self.view.s2w(e.x, e.y)
-        if mode == "flatten" and target is None:
-            target = tp.height_at(wx, wz)
-        self.drag = {"mode": "paint", "patches": [], "last": None, "brush": mode, "target": target,
-                     "before": tp.heights.copy() if mode != "texture" else None, "box": None,
-                     "pointer": (wx, wz)}
-        self.paint_dab(wx, wz)
-        self._paint_timer = self.root.after(PAINT_REPEAT_MS, self.paint_repeat)
+            return False
+        f.strokes = list(strokes)
+        f.dirty = True
+        self.busy("Updating the ground...")
+        try:
+            reg = self.recompute_features(changed)
+            moved = self.reseat_objects(before, reg[0]) if reg else 0
+        finally:
+            self.idle()
 
-    def paint_repeat(self):
-        """Keep applying the brush while the mouse button is held still."""
-        d = self.drag
-        if not d or d.get("mode") != "paint":
+        def undo():
+            f.strokes = old
+            f.dirty = True
+            self.recompute_features(changed)
+            tp.resync()
+        m.commit(undo_fn=undo)
+        self.changed()
+        if moved:
+            self.status(f"{moved} object(s) moved with the ground.", "ok")
+        return True
+
+    def recompute_features(self, changed):
+        m = self.model
+        tp, f = m.terrain_paint, m.terrain_features
+        reg = f.apply(tp.heights, tp.alphas, changed)
+        if reg:
+            tp.dirty = tp.heights_dirty = True
+            (hr, hc), (ar, ac) = reg
+            self.show_relief(hr, hc)
+            if ar[0] < ar[1] and ac[0] < ac[1]:
+                self.show_painted(ar, ac)
+        return reg
+
+    def feature_name(self, s):
+        return s.get("brush") or KIND_NAMES[s["kind"]]
+
+    def refresh_feature_list(self):
+        t = self.feat_tree
+        t.delete(*t.get_children())
+        f = self.features()
+        if f is not None:
+            for s in f.strokes:
+                size = f"{length(s['points']):.0f} m" if len(s["points"]) > 1 else "point"
+                t.insert("", "end", iid=str(s["id"]), text=f" #{s['id']} {self.feature_name(s)}", values=(size,))
+        if self.feature_sel is not None and (f is None or f.stroke(self.feature_sel) is None):
+            self.feature_sel = None
+        self.sync_feature_list()
+
+    def sync_feature_list(self):
+        t = self.feat_tree
+        want = [str(self.feature_sel)] if self.feature_sel is not None and t.exists(str(self.feature_sel)) else []
+        if list(t.selection()) == want:
             return
-        self.apply_dabs([d["pointer"]])
+        self._feat_sync = True
+        try:
+            t.selection_set(want)
+            if want:
+                t.see(want[0])
+            self.root.update_idletasks()
+        finally:
+            self._feat_sync = False
+
+    def on_feature_list_select(self):
+        if self._feat_sync:
+            return
+        sel = self.feat_tree.selection()
+        self.select_feature(int(sel[0]) if sel else None)
+
+    def select_feature(self, sid):
+        """Select terrain feature `sid` (None: none); objects are deselected."""
+        self.feature_sel = sid
+        if sid is not None and self.sel:
+            self.sel = []
+            self.sync_table_selection()
+        self.sync_feature_list()
+        self.refresh_props()
         self.request_render()
-        self._paint_timer = self.root.after(PAINT_REPEAT_MS, self.paint_repeat)
 
-    def paint_dab(self, wx, wz):
-        d = self.drag
-        d["pointer"] = (wx, wz)
-        radius = self.brush_size.get()
-        last = d["last"]
-        points = [(wx, wz)]
-        if last is not None:
-            dist = math.hypot(wx - last[0], wz - last[1])
-            step = max(0.5, radius * 0.3)
-            if dist < step:
+    def clear_feature_choice(self):
+        if self.feature_sel is not None:
+            self.feature_sel = None
+            self.sync_feature_list()
+
+    def frame_feature(self, sid):
+        f = self.features()
+        s = f.stroke(sid) if f is not None and sid is not None else None
+        if s is None:
+            return
+        pts = np.asarray(s["points"], dtype=float)
+        pad = s["width"] + 20.0
+        x0, z0 = pts.min(0) - pad
+        x1, z1 = pts.max(0) + pad
+        v = self.view
+        v.cx, v.cz = (x0 + x1) / 2, (z0 + z1) / 2
+        v.scale = max(0.05, min(40.0, min(v.w / max(1.0, x1 - x0), v.h / max(1.0, z1 - z0)) * 0.9))
+        self.request_render()
+
+    # ---- drawing a terrain feature --------------------------------------
+
+    def start_terrain_sketch(self, e):
+        """Draw terrain tool: the first point of a new stroke. Clicks add
+        points, dragging draws freehand; it ends like a route (right-click,
+        double-click or Enter)."""
+        if not self.can_paint():
+            self.status("Terrain tools work on custom scenarios only (Scenario > New scenario).", "warn",
+                        banner=True)
+            return
+        self.clear_feature_choice()
+        self.sketch = {"kind": "terrain", "points": [self.view.s2w(e.x, e.y)], "brush": dict(self.brush),
+                       "last": (e.x, e.y, getattr(e, "time", 0))}
+        self.drag = {"mode": "stroke"}
+        self.canvas.config(cursor=self.cursor())
+        self.status(self.sketch_hint())
+        self.draw_rubber()
+
+    def terrain_click(self, e):
+        s = self.sketch
+        now = getattr(e, "time", 0)
+        last = s.get("last")
+        if last and 0 <= now - last[2] < DOUBLE_CLICK_MS and abs(e.x - last[0]) < 6 and abs(e.y - last[1]) < 6:
+            self.finish_sketch()
+            return
+        s["last"] = (e.x, e.y, now)
+        s["points"].append(self.view.s2w(e.x, e.y))
+        self.drag = {"mode": "stroke"}
+        self.status(self.sketch_hint())
+        self.draw_rubber()
+
+    def stroke_motion(self, e):
+        """Button held while drawing: a point every FREEHAND_PX pixels."""
+        s = self.sketch
+        self.mouse = (e.x, e.y)
+        if s is None or s.get("kind") != "terrain":
+            return
+        x, z = self.view.s2w(e.x, e.y)
+        lx, lz = s["points"][-1]
+        if math.hypot(x - lx, z - lz) * self.view.scale >= FREEHAND_PX:
+            s["points"].append((x, z))
+            s["last"] = None
+            self.status(self.sketch_hint())
+        self.draw_rubber()
+
+    def add_terrain_stroke(self, s):
+        pts = []
+        for p in s["points"]:
+            if not pts or math.hypot(p[0] - pts[-1][0], p[1] - pts[-1][1]) > 0.05:
+                pts.append(p)
+        b = s["brush"]
+        try:
+            f = self.features(create=True)
+        except Exception as ex:
+            self.status(f"This terrain cannot be edited: {ex}", "warn", banner=True)
+            return
+        st = f.make_stroke(b, pts, find_layer(self.layer_names(), b["texture"]))
+        name = self.feature_name(st)
+        if self.edit_features(f"Draw {name}", f.strokes + [st], [st]):
+            what = f"{length(pts):.0f} m" if len(pts) > 1 else "one point"
+            self.status(f"Terrain feature #{st['id']} drawn: {name}, {what}." + self.ai_note(st), "ok")
+
+    def draw_stroke_shape(self, pts, b, col, chosen, tag):
+        """A stroke on the map: its width (hatched) and centre line, or a circle
+        for one point; chosen: thicker, with its points as handles."""
+        c = self.canvas
+        wpx = b["width"] * self.view.scale
+        if len(pts) > 1:
+            flat = [q for p in pts for q in p]
+            if chosen or wpx >= 6:
+                c.create_polygon(*outline_polygon(pts, max(1.0, wpx / 2)), fill="", outline=col, dash=(4, 3),
+                                 tags=tag)
+            c.create_line(*flat, fill="#000000", width=4 if chosen else 3, tags=tag)
+            c.create_line(*flat, fill=col, width=2 if chosen else 1, tags=tag)
+        elif pts:
+            x, y = pts[0]
+            r = max(3.0, wpx / 2)
+            c.create_oval(x - r, y - r, x + r, y + r, outline="#000000", width=4 if chosen else 3, tags=tag)
+            c.create_oval(x - r, y - r, x + r, y + r, outline=col, width=2 if chosen else 1, tags=tag)
+        if chosen:
+            for x, y in pts:
+                c.create_rectangle(x - 4, y - 4, x + 4, y + 4, fill="#FFFFFF", outline="#000000", tags=tag)
+
+    def draw_features(self):
+        f = self.features()
+        if f is None or not self.layer("Terrain") or not self.layer("Features"):
+            return
+        v = self.view
+        for s in f.strokes:
+            pts = [v.w2s(x, z) for x, z in s["points"]]
+            self.draw_stroke_shape(pts, s, self.brush_colour(s), s["id"] == self.feature_sel, "overlay")
+
+    # ---- editing terrain features -----------------------------------------
+
+    def feature_hit(self, sx, sy):
+        """Id of the terrain feature under a screen point (the last drawn first)."""
+        f = self.features()
+        if f is None or not self.layer("Terrain") or not self.layer("Features"):
+            return None
+        p = self.view.s2w(sx, sy)
+        tol = 6.0 / max(self.view.scale, 1e-6)
+        for s in reversed(f.strokes):
+            if line_distance(p, s["points"])[0] <= max(s["width"] / 2, tol):
+                return s["id"]
+        return None
+
+    def feature_vertex_at(self, s, sx, sy):
+        best = None
+        for i, (x, z) in enumerate(s["points"]):
+            px, py = self.view.w2s(x, z)
+            d = math.hypot(px - sx, py - sy)
+            if d <= 7 and (best is None or d < best[0]):
+                best = (d, i)
+        return best[1] if best else None
+
+    def vertex_press(self, e):
+        """Edit terrain features tool: select a feature, drag a point or the
+        whole feature; a double-click on its line adds a point."""
+        f = self.features()
+        now = getattr(e, "time", 0)
+        last, self._vertex_click = self._vertex_click, (e.x, e.y, now)
+        s = f.stroke(self.feature_sel) if f is not None and self.feature_sel is not None else None
+        if s is not None:
+            i = self.feature_vertex_at(s, e.x, e.y)
+            if i is not None:
+                self.drag = {"mode": "fvertex", "id": s["id"], "index": i, "start": (e.x, e.y),
+                             "points": [list(p) for p in s["points"]], "moved": False}
                 return
-            n = int(dist // step)
-            points = [(last[0] + (wx - last[0]) * (k + 1) / n, last[1] + (wz - last[1]) * (k + 1) / n)
-                      for k in range(n)]
-        self.apply_dabs(points)
-        d["last"] = points[-1]
-        self.request_render()
+            double = last and 0 <= now - last[2] < DOUBLE_CLICK_MS and abs(e.x - last[0]) < 6 and \
+                abs(e.y - last[1]) < 6
+            if double and self.feature_hit(e.x, e.y) == s["id"]:
+                self._vertex_click = None
+                self.insert_feature_point(s["id"], self.view.s2w(e.x, e.y))
+                return
+        hit = self.feature_hit(e.x, e.y)
+        if hit != self.feature_sel:
+            self.select_feature(hit)
+        if hit is not None:
+            pts = [list(p) for p in f.stroke(hit)["points"]]
+            self.drag = {"mode": "fmove", "id": hit, "start": (e.x, e.y), "origin": self.view.s2w(e.x, e.y),
+                         "base": pts, "points": [list(p) for p in pts], "moved": False}
 
-    def apply_dabs(self, points):
+    def feature_drag_motion(self, e):
         d = self.drag
-        tp = self.model.terrain_paint
-        radius = self.brush_size.get()
-        strength = self.brush_strength.get() / 100.0
-        shape = self.brush_shape()
-        for x, z in points:
-            if d["brush"] == "texture":
-                res = tp.paint(x, z, radius, self.paint_layer(), strength * PAINT_DAB_STRENGTH, shape)
-            elif d["brush"] in ("raise", "lower"):
-                res = tp.sculpt(x, z, radius, d["brush"], strength, step=self.brush_step.get(), shape=shape)
-            else:
-                res = tp.sculpt(x, z, radius, d["brush"], strength * SHAPE_DAB_STRENGTH, d["target"], shape=shape)
-            if res:
-                undo, rows, cols = res
-                d["patches"].append(undo)
-                if d["brush"] == "texture":
-                    self.show_painted(rows, cols)
-                else:
-                    self.show_relief(rows, cols)
-                    b = d["box"]
-                    d["box"] = (rows, cols) if b is None else ((min(b[0][0], rows[0]), max(b[0][1], rows[1])),
-                                                              (min(b[1][0], cols[0]), max(b[1][1], cols[1])))
+        if not d["moved"] and math.hypot(e.x - d["start"][0], e.y - d["start"][1]) < 4:
+            return
+        d["moved"] = True
+        x, z = self.view.s2w(e.x, e.y)
+        if d["mode"] == "fvertex":
+            d["points"][d["index"]] = [x, z]
+        else:
+            dx, dz = x - d["origin"][0], z - d["origin"][1]
+            d["points"] = [[px + dx, pz + dz] for px, pz in d["base"]]
+        s = self.features().stroke(d["id"])
+        self.canvas.delete("rubber")
+        if s is not None:
+            pts = [self.view.w2s(px, pz) for px, pz in d["points"]]
+            self.draw_stroke_shape(pts, s, self.brush_colour(s), True, "rubber")
+
+    def feature_drag_release(self):
+        d, self.drag = self.drag, None
+        self.canvas.delete("rubber")
+        f = self.features()
+        s = f.stroke(d["id"]) if f is not None else None
+        if not d["moved"] or s is None:
+            return
+        label = "Move terrain feature point" if d["mode"] == "fvertex" else "Move terrain feature"
+        self.replace_feature(s, dict(s, points=d["points"]), label)
+
+    def replace_feature(self, s, new, label):
+        f = self.features()
+        return self.edit_features(label, [new if x["id"] == s["id"] else x for x in f.strokes], [s, new])
+
+    def insert_feature_point(self, sid, at):
+        s = self.features().stroke(sid)
+        pts = [list(p) for p in s["points"]]
+        if len(pts) == 1:
+            pts.append(list(at))
+        else:
+            _, i, q = line_distance(at, pts)
+            pts.insert(i + 1, list(q))
+        self.replace_feature(s, dict(s, points=pts), "Add terrain feature point")
+
+    def remove_feature_point(self, sid, index):
+        s = self.features().stroke(sid)
+        if s is None or len(s["points"]) < 2:
+            return
+        pts = [list(p) for k, p in enumerate(s["points"]) if k != index]
+        self.replace_feature(s, dict(s, points=pts), "Remove terrain feature point")
+
+    def delete_feature(self):
+        f = self.features()
+        s = f.stroke(self.feature_sel) if f is not None and self.feature_sel is not None else None
+        if s is None:
+            return
+        name = self.feature_name(s)
+        if self.edit_features("Delete terrain feature", [x for x in f.strokes if x["id"] != s["id"]], [s]):
+            self.feature_sel = None
+            self.refresh_feature_list()
+            self.refresh_props()
+            self.status(f"Terrain feature #{s['id']} ({name}) deleted.", "ok")
+
+    def set_feature_param(self, sid, key, value):
+        """Properties pane: change one parameter of a terrain feature."""
+        f = self.features()
+        s = f.stroke(sid)
+        new = dict(s)
+        if key == "kind":
+            new["kind"] = value
+            if value == "level" and new.get("level") is None:
+                new["level"] = round(f.ground_height(*s["points"][0]), 2)
+        elif key == "texture":
+            new["texture"] = value
+        else:
+            text = str(value).strip().replace(",", ".")
+            new[key] = float(text)
+        checked = clean_brush(new)
+        for k in ("kind", "width", "height", "slope", "rim", "crossings"):
+            new[k] = checked[k]
+        if new.get("level") is not None:
+            new["level"] = checked["level"]
+        if new != s:
+            self.replace_feature(s, new, "Change terrain feature")
+
+    def feature_props(self, s):
+        """Properties of a terrain feature."""
+        tk.Label(self.props, text="TERRAIN FEATURE", font=UI_BOLD, anchor="w", padx=2).grid(
+            row=self._next(), column=0, columnspan=2, sticky="ew")
+        self.prop_sep()
+        sid = s["id"]
+        self.prop_info("Feature", f"#{sid} {self.feature_name(s)}")
+        n = len(s["points"])
+        self.prop_info("Points", f"{n}, {length(s['points']):.0f} m long" if n > 1 else "1 (a single stamp)")
+        self.prop_combo("Kind", [KIND_NAMES[k] for k in KINDS], KINDS.index(s["kind"]),
+                        lambda i: self.set_feature_param(sid, "kind", KINDS[i]))
+        for key, text, unit, _ in BRUSH_PARAMS:
+            if key not in KIND_PARAMS[s["kind"]]:
+                continue
+            v = s.get(key)
+            self.prop_entry(f"{text} ({unit})", "" if v is None else f"{v:g}",
+                            lambda val, k=key: self.set_feature_param(sid, k, val))
+        names = self.layer_names()
+        tex = s.get("texture")
+        self.prop_combo("Texture", ["(none)"] + [layer_label(x) for x in names],
+                        0 if tex is None or tex >= len(names) else tex + 1,
+                        lambda i: self.set_feature_param(sid, "texture", None if i == 0 else i - 1))
+        note = self.ai_note(s).strip()
+        if note:
+            self.prop_info("AI", note)
+        r = self._next()
+        ttk.Button(self.props, text="Delete feature", command=self.delete_feature).grid(
+            row=r, column=1, sticky="w", pady=(6, 0))
 
     def show_relief(self, rows, cols):
         """Redraw the map after a height change in heightmap rows and cols."""
@@ -1941,29 +2499,6 @@ class EditorApp:
                 self._terrain_img.paste(Image.fromarray(part), (c0, n - r1))
         self._terrain_rev += 1
         self._base_key = None
-
-    def finish_paint(self):
-        d = self.drag
-        if getattr(self, "_paint_timer", None):
-            self.root.after_cancel(self._paint_timer)
-            self._paint_timer = None
-        m = self.model
-        tp = m.terrain_paint
-        patches = d["patches"]
-        moved = self.reseat_objects(d["before"], d["box"]) if d["brush"] != "texture" and d["box"] else 0
-
-        def undo():
-            for p in reversed(patches):
-                rows, cols = tp.restore_patch(p)
-                if p[0] == "h":
-                    self.show_relief(rows, cols)
-                else:
-                    self.show_painted(rows, cols)
-            tp.resync()
-        m.commit(undo_fn=undo if patches else None)
-        self.changed()
-        if moved:
-            self.status(f"{moved} object(s) moved with the ground.", "ok")
 
     def reseat_objects(self, before, box):
         """Keep tanks, waypoints and scenery on the ground after a height stroke:
@@ -2732,7 +3267,9 @@ class EditorApp:
     def cursor(self):
         if self.space_down:
             return TOOL_CURSORS["pan"]
-        return TOOL_CURSORS["add"] if self.sketch is not None else TOOL_CURSORS[self.tool]
+        if self.sketch is not None:
+            return TOOL_CURSORS["feature" if self.sketch.get("kind") == "terrain" else "add"]
+        return TOOL_CURSORS[self.tool]
 
     def tool_hint(self):
         """Instructions of the active tool for the status bar."""
@@ -2753,9 +3290,13 @@ class EditorApp:
             if kind == "template" and tuple(value) == ("waypoint",):
                 return "Waypoint: click on the map to add a waypoint after the selected one of the selected route."
             return f"Add {title}: click on the map to place one."
-        if tool in TERRAIN_TOOLS:
-            what = "paints the ground layer chosen" if tool == "texture" else "changes the ground"
-            return f"{TOOL_NAMES[tool]}: click or drag on the map; the brush {what} (settings on the Terrain tab)."
+        if tool == "feature":
+            return (f"Draw terrain with '{self.brush['name']}': click points or drag to draw; right-click, "
+                    "double-click or Enter finishes (one point places a single stamp)." + self.ai_note(self.brush))
+        if tool == "vertex":
+            return ("Edit terrain features: click a feature to select it, drag a point or the feature to move "
+                    "it, double-click its line to add a point; Del deletes it, right-click > Remove point "
+                    "removes a point.")
         return {"select": "Select / move: click to select (Shift adds, Ctrl toggles), drag to move, drag on "
                           "empty map for a selection box.",
                 "pan": "Pan: drag the map.",
@@ -2909,6 +3450,8 @@ class EditorApp:
         self.fit_view()
         self.idle()
         self.update_title()
+        self.feature_sel = None
+        self.load_terrain_features()
         self.refresh_terrain_page()
         self.fill_catalog()
         self.refresh_props()
@@ -2968,6 +3511,7 @@ class EditorApp:
                 self.op("Correct event list counts", m.repair_counts)
             nav_note = self.auto_rebuild_navmesh()
             m.save()
+            self.save_terrain_features()
         except PermissionError:
             self.idle()
             self.status("Save failed: the level file is locked. Close the game and try again.", "warn", banner=True)
@@ -3334,6 +3878,7 @@ class EditorApp:
 
     def changed(self, props=True):
         self.update_title()
+        self.refresh_feature_list()
         if props:
             self.refresh_props()
         self.refresh_tables()
@@ -3477,6 +4022,9 @@ class EditorApp:
         m = self.model
         if not m:
             return
+        if self.feature_sel is not None and not self.sel:
+            self.delete_feature()
+            return
         gos = [g for g in self.sel if g in m.go and self.kind(g) != "pack"]
         if not gos:
             return
@@ -3610,6 +4158,13 @@ class EditorApp:
         c.delete("rubber")
         if self.sketch is None or not self.mouse or not self.model:
             return
+        s = self.sketch
+        if s.get("kind") == "terrain":
+            pts = [self.view.w2s(x, z) for x, z in s["points"]]
+            if not (self.drag and self.drag.get("mode") == "stroke"):
+                pts.append(self.mouse)
+            self.draw_stroke_shape(pts, s["brush"], self.brush_colour(s["brush"]), True, "rubber")
+            return
         a = self.sketch_after()
         if a is None or a not in self.model.tr:
             return
@@ -3728,6 +4283,12 @@ class EditorApp:
         return kids[-1]["m_PathID"] if kids else None
 
     def sketch_hint(self):
+        s = self.sketch
+        if s.get("kind") == "terrain":
+            n = len(s["points"])
+            return (f"Drawing '{s['brush']['name']}': {n} point(s), {length(s['points']):.0f} m. Click or drag to "
+                    "continue; right-click, double-click or Enter finishes, Backspace removes the last point, "
+                    "Esc cancels.")
         m, pack = self.model, self.sketch["pack"]
         n = len(m.tr[pack]["m_Children"]) if pack in m.tr else 0
         return (f"Route {m.name(m.go_of_tr[pack])}: {n} waypoint(s). Click the next waypoint; right-click, "
@@ -3735,6 +4296,9 @@ class EditorApp:
 
     def sketch_click(self, e):
         s = self.sketch
+        if s.get("kind") == "terrain":
+            self.terrain_click(e)
+            return
         now = getattr(e, "time", 0)
         last = s.get("last")
         if last and 0 <= now - last[2] < DOUBLE_CLICK_MS and abs(e.x - last[0]) < 6 and abs(e.y - last[1]) < 6:
@@ -3756,6 +4320,10 @@ class EditorApp:
         s, self.sketch = self.sketch, None
         self.canvas.delete("rubber")
         self.canvas.config(cursor=self.cursor())
+        if s and s.get("kind") == "terrain":
+            self.drag = None
+            self.add_terrain_stroke(s)
+            return
         if s and self.model and s["pack"] in self.model.tr:
             m = self.model
             n = len(m.tr[s["pack"]]["m_Children"])
@@ -3766,6 +4334,10 @@ class EditorApp:
         s, self.sketch = self.sketch, None
         self.canvas.delete("rubber")
         self.canvas.config(cursor=self.cursor())
+        if s.get("kind") == "terrain":
+            self.drag = None
+            self.status("Drawing cancelled.")
+            return
         m = self.model
         while m is not None and len(m.undo_stack) > s["start"]:
             self.undo()
@@ -3775,6 +4347,15 @@ class EditorApp:
         """Backspace: remove the last waypoint drawn; the first waypoint of a new
         route cancels the route."""
         s, m = self.sketch, self.model
+        if s.get("kind") == "terrain":
+            s["points"].pop()
+            s["last"] = None
+            if s["points"]:
+                self.status(self.sketch_hint())
+                self.draw_rubber()
+            else:
+                self.cancel_sketch()
+            return
         if len(m.undo_stack) > s["start"] + (1 if s["created"] else 0):
             self.undo()
             self.status(self.sketch_hint())
@@ -4059,6 +4640,8 @@ class EditorApp:
         """Select an object. mode: replace, add (Shift) or toggle (Ctrl)."""
         if not self.model:
             return
+        if go is not None:
+            self.clear_feature_choice()
         if mode == "replace" or go is None:
             if mode == "replace":
                 self.sel = [] if go is None else [go]
@@ -4082,6 +4665,8 @@ class EditorApp:
         if not self.model:
             return
         gos = list(dict.fromkeys(gos))
+        if gos:
+            self.clear_feature_choice()
         if mode == "replace":
             self.sel = gos
         elif mode == "add":
@@ -4234,8 +4819,10 @@ class EditorApp:
         if self.tool == "add":
             self.add_click(e)
             return
-        if self.tool in TERRAIN_TOOLS:
-            self.start_paint(e)
+        if self.tool == "feature":
+            self.start_terrain_sketch(e)
+        elif self.tool == "vertex":
+            self.vertex_press(e)
         elif self.tool == "pan":
             self.on_pan_start(e)
         elif self.tool == "zoomin":
@@ -4327,9 +4914,11 @@ class EditorApp:
         if not d or not self.model:
             return
         mode = d["mode"]
-        if mode == "paint":
-            self.paint_dab(*self.view.s2w(e.x, e.y))
-            self.draw_brush(e.x, e.y)
+        if mode == "stroke":
+            self.stroke_motion(e)
+            return
+        if mode in ("fvertex", "fmove"):
+            self.feature_drag_motion(e)
             return
         if mode == "pan":
             if math.hypot(e.x - d["start"][0], e.y - d["start"][1]) >= 4:
@@ -4375,9 +4964,11 @@ class EditorApp:
 
     def on_release(self, e):
         d = self.drag
-        if d and d["mode"] == "paint":
-            self.finish_paint()
+        if d and d["mode"] == "stroke":
             self.drag = None
+            return
+        if d and d["mode"] in ("fvertex", "fmove"):
+            self.feature_drag_release()
             return
         self.drag = None
         if not d:
@@ -4410,6 +5001,9 @@ class EditorApp:
             return
         if self.sketch is not None:
             self.finish_sketch()
+            return
+        if self.tool == "vertex":
+            self.feature_menu(e)
             return
         stop = self.tool_title() if self.tool != "select" else None
         target = self.hit(e.x, e.y, exact=bool(e.state & ALT_MASK))
@@ -4477,18 +5071,38 @@ class EditorApp:
         finally:
             menu.grab_release()
 
+    def feature_menu(self, e):
+        """Right-click menu of the Edit terrain features tool."""
+        menu = tk.Menu(self.root, tearoff=0)
+        menu.add_command(label=f"Stop {self.tool_title()}", command=self.stop_tool, accelerator="Esc")
+        hit = self.feature_hit(e.x, e.y)
+        if hit is not None and hit != self.feature_sel:
+            self.select_feature(hit)
+        f = self.features()
+        s = f.stroke(self.feature_sel) if f is not None and self.feature_sel is not None else None
+        if s is not None:
+            i = self.feature_vertex_at(s, e.x, e.y)
+            menu.add_separator()
+            menu.add_command(label="Remove point", command=lambda: self.remove_feature_point(s["id"], i),
+                             state="normal" if i is not None and len(s["points"]) > 1 else "disabled")
+            menu.add_command(label="Delete terrain feature", command=self.delete_feature, accelerator="Del")
+            menu.add_command(label="Zoom to terrain feature", command=lambda: self.frame_feature(s["id"]))
+        try:
+            menu.tk_popup(e.x_root, e.y_root)
+        finally:
+            menu.grab_release()
+
     def on_wheel(self, e):
         self.zoom_by(1.2 ** (e.delta / 120), e.x, e.y)
 
     def draw_brush(self, x, y):
         c = self.canvas
         c.delete("brush")
-        if self.tool not in TERRAIN_TOOLS or not self.model:
+        if self.tool != "feature" or not self.model:
             return
-        r = self.brush_size.get() * self.view.scale
+        r = max(3.0, self.brush["width"] / 2 * self.view.scale)
         c.create_oval(x - r, y - r, x + r, y + r, outline="#000000", width=4, tags="brush")
-        c.create_oval(x - r, y - r, x + r, y + r, outline=BRUSH_COLOURS.get(self.tool, "#FFFFFF"), width=2,
-                      tags="brush")
+        c.create_oval(x - r, y - r, x + r, y + r, outline=self.brush_colour(self.brush), width=2, tags="brush")
 
     def on_hover(self, e):
         self.mouse = (e.x, e.y)
@@ -4551,6 +5165,8 @@ class EditorApp:
             elif self.drag and self.drag.get("mode") in ("boxsel", "zoombox"):
                 self.drag = None
                 self.canvas.delete("rubber")
+            elif self.feature_sel is not None:
+                self.select_feature(None)
             elif self.tool != "select":
                 self.stop_tool()
             else:
@@ -4770,6 +5386,7 @@ class EditorApp:
                         c.create_line(sx, sy, near[0], near[1], fill=col, width=3 if e == sel_ev else 2,
                                       dash=(6, 4), tags="overlay")
 
+        self.draw_features()
         if self.layer("Scenery") and self.layer("Trigger areas"):
             col = hexc(AREA_COLOUR)
             for g in m.areas:
@@ -4863,6 +5480,10 @@ class EditorApp:
             self.prop_label("No mission open.")
             return
         sel = [g for g in self.sel if g in m.go]
+        f = getattr(m, "terrain_features", None)
+        if not sel and self.feature_sel is not None and f is not None and f.stroke(self.feature_sel):
+            self.feature_props(f.stroke(self.feature_sel))
+            return
         if len(sel) > 1:
             self.multi_props(sel)
             return

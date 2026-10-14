@@ -19,7 +19,9 @@ Each backup (backups/<installation>/scenarios/<scene id>/) holds
     heightmap; the terrain copy is made again from the original terrain on
     restore,
   - for a rebuilt AI route map only its source (meta.json "navmesh"): the
-    route map is derived data and is rebuilt on restore.
+    route map is derived data and is rebuilt on restore,
+  - terrain_base.npz and terrain_features.json (only for terrain features):
+    written by the editor when the scenario is saved (terrain_features.py).
 
 A backup can be exported as one .tbscenario file (a zip of these files) and
 imported in another installation: it contains no game assets, only the map and
@@ -45,12 +47,13 @@ import numpy as np
 
 from scene_io import SceneFile, layout_tree, script_key
 from terrain_edit import copy_terrain, own_assets_name, read_alpha, read_heights, terrain_components
+from terrain_features import BASE_FILE, FEATURES_FILE
 
 BACKUP_DIR_NAME = "scenarios"
 EXCHANGE_SUFFIX = ".tbscenario"
 EXCHANGE_FORMAT = 1
 BACKUP_FILES = ("meta.json", "mission.json", "refs.json.gz", "scripts.json.gz", "battle.level")
-OPTIONAL_FILES = ("terrain.npz",)
+OPTIONAL_FILES = ("terrain.npz", BASE_FILE, FEATURES_FILE)
 MAX_IMPORT_BYTES = 256 * 1024 * 1024
 SKIP_MISSION_FIELDS = {"m_GameObject", "m_Enabled", "m_Script", "m_Name", "Scene_ID", "Menu_Scene_Name",
                        "Battle_Scene_Name", "Scene_Title", "Scene_JPN_Title", "Scene_Briefing",

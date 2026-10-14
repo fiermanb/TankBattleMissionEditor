@@ -10,7 +10,7 @@ https://store.steampowered.com/app/5086560/Tank_Battle_Classic/
 
 ![Events and trigger areas: the Objects pane, an event with its trigger area, and the events table](docs/screenshot-events.png)
 
-![Terrain tools: the Raise tool with its brush, brush options and the elevation tint](docs/screenshot-terrain.png)
+![Terrain features: trenches, tank pits, craters, a road and an embankment drawn with brushes; a selected trench and its properties](docs/screenshot-terrain.png)
 
 ## Start
 
@@ -26,7 +26,8 @@ changes.
 - Tank and mission settings: type, side, AI behaviour, respawns, fog.
 - Events with timers, destroyed tanks or trigger areas, for example waves.
 - New scenarios from a mission or on an empty terrain, with a choice of player tanks.
-- Terrain painting and height brushes for custom scenarios.
+- Terrain features for custom scenarios: trenches, tank pits, roads and more,
+  drawn as lines or points with ready-made or own brushes, and editable later.
 - AI tanks of custom scenarios drive around changed terrain and objects.
 - Back up, export and import scenarios.
 
@@ -41,13 +42,13 @@ button returns to Select / move.
 | --- | --- |
 | Click / Shift+click / Ctrl+click | select / add / toggle |
 | Drag on empty map / drag selection (Select / move) | selection box / move |
-| Right-click | context menu; finishes a route being drawn |
+| Right-click | context menu; finishes a route or terrain feature being drawn |
 | Wheel / middle or right drag, or Space held | zoom / pan (in any tool) |
-| Backspace / Esc while drawing a route | remove the last waypoint / cancel the route |
+| Backspace / Esc while drawing a route or terrain feature | remove the last point / cancel |
 | Ctrl+X / C / V | cut / copy / paste (at the pointer) |
 | Del, Ctrl+D, Q / E | delete, duplicate, rotate |
 | Ctrl+Z, Ctrl+S, Ctrl+A | undo, save, select all |
-| Esc | cancel a route or selection box in progress, else back to Select / move, else clear the selection |
+| Esc | cancel a drawing or selection box in progress, else clear a selected terrain feature, else back to Select / move, else clear the selection |
 
 Help > Controls lists all shortcuts.
 

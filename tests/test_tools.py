@@ -55,13 +55,13 @@ class ToolTest(unittest.TestCase):
 
     def test_tools_are_exclusive_and_persistent(self):
         app = self.app
-        app.set_tool("raise")
-        self.assertEqual(self.state(), ("raise", "sb_up_arrow"))
-        self.assertIn("Raise terrain", app.status_lbl.cget("text"))
+        app.set_tool("vertex")
+        self.assertEqual(self.state(), ("vertex", "tcross"))
+        self.assertIn("Edit terrain features", app.status_lbl.cget("text"))
         # tabs do not change the tool
         app.show_page("left", "objects")
         app.show_page("left", "toc")
-        self.assertEqual(self.state()[0], "raise")
+        self.assertEqual(self.state()[0], "vertex")
         self.assertIn("Esc, right-click > Stop", app.status_lbl.cget("text"))
         # with nothing in progress Esc returns to Select / move
         app.on_key(Key("Escape"))
@@ -88,7 +88,7 @@ class ToolTest(unittest.TestCase):
 
     def test_add_tool_places_with_each_click(self):
         app, m = self.app, self.app.model
-        app.set_tool("lower")
+        app.set_tool("feature")
         app.use_template(("spawn", 1))
         self.assertEqual(self.state(), ("add", "plus"))
         self.assertEqual(self.pressed(), {"add:hostile"})
@@ -135,6 +135,63 @@ class ToolTest(unittest.TestCase):
         while len(m.undo_stack) > depth:
             app.undo()
         self.assertEqual(len(m.packs), packs)
+        app.set_tool("select")
+
+    def test_terrain_features_are_drawn_and_edited(self):
+        app, m = self.app, self.app.model
+        app.can_paint = lambda: True
+        self.addCleanup(lambda: delattr(app, "can_paint"))
+        try:
+            app.terrain_session()
+        except Exception as ex:
+            self.skipTest(f"terrain of scene {SCENE} cannot be edited: {ex}")
+        app.view.w, app.view.h = 400, 300
+        app.view.cx, app.view.cz, app.view.scale = 0.0, 0.0, 2.0
+        depth = len(m.undo_stack)
+        app.brush_tree.selection_set("b0")
+        self.root.update()
+        self.assertEqual(app.brush["name"], "Trench")
+        self.assertEqual(self.state(), ("feature", "pencil"), "choosing a brush chooses the Draw terrain tool")
+        x, z = app.view.s2w(150, 150)
+        g0 = m.ground(x, z)
+        app.on_press(Click(100, 150, time=1000))
+        app.on_release(Click(100, 150, time=1050))
+        self.assertEqual(app.sketch["kind"], "terrain")
+        app.on_press(Click(200, 150, time=3000))
+        app.on_release(Click(200, 150, time=3050))
+        app.on_press(Click(250, 180, time=5000))
+        app.on_key(Key("BackSpace"))
+        self.assertEqual(len(app.sketch["points"]), 2)
+        app.on_key(Key("Return"))
+        self.assertIsNone(app.sketch)
+        f = app.features()
+        self.assertEqual(len(f.strokes), 1)
+        self.assertAlmostEqual(m.ground(x, z) - g0, -1.6, delta=0.05, msg="the trench is cut 1.6 m deep")
+        self.assertEqual(app.feat_tree.get_children(), (str(f.strokes[0]["id"]),))
+        # a second stroke over the same line does not deepen it
+        app.on_press(Click(100, 150, time=7000))
+        app.on_press(Click(200, 150, time=9000))
+        app.on_key(Key("Return"))
+        self.assertEqual(len(f.strokes), 2)
+        self.assertAlmostEqual(m.ground(x, z) - g0, -1.6, delta=0.05)
+        # Edit terrain features: select, move a point, delete
+        app.set_tool("vertex")
+        app.on_press(Click(150, 150, time=20000))
+        app.on_release(Click(150, 150, time=20050))
+        sid = app.feature_sel
+        self.assertEqual(sid, f.strokes[-1]["id"], "the last drawn feature is on top")
+        app.on_press(Click(200, 150, time=22000))
+        app.on_motion(Click(200, 100, time=22100))
+        app.on_release(Click(200, 100, time=22200))
+        self.assertAlmostEqual(f.stroke(sid)["points"][1][1], app.view.s2w(200, 100)[1], places=3)
+        app.on_key(Key("Delete"))
+        self.assertIsNone(f.stroke(sid))
+        self.assertAlmostEqual(m.ground(x, z) - g0, -1.6, delta=0.05, msg="the first trench remains")
+        app.on_key(Key("Escape"))
+        while len(m.undo_stack) > depth:
+            app.undo()
+        self.assertEqual(f.strokes, [])
+        self.assertAlmostEqual(m.ground(x, z), g0, places=3, msg="undo restores the ground")
         app.set_tool("select")
 
     def test_trigger_area_size_fields(self):

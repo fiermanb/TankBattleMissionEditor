@@ -29,10 +29,12 @@ WHAT IT DOES
   ends a tool. Right-click > Add here places at the pointer.
 - Table Of Contents: double-click opens a layer's table; right-click
   selects, zooms or shows only that layer.
-- Terrain tools (toolbar): paint the ground layers and raise, lower, flatten
-  or smooth the ground of a custom scenario (it gets its own copy of the
-  terrain; the original missions keep theirs). Brush options are on the
-  Terrain tab; elevation tint and contour lines in the Table Of Contents.
+- Terrain tools (toolbar) for custom scenarios (a scenario gets its own copy
+  of the terrain; the original missions keep theirs): Draw terrain draws with
+  the brush chosen on the Terrain tab (trench, tank pit, crater, road and
+  others, or brushes of your own) along clicked or dragged points; Edit
+  terrain features moves, reshapes or deletes a drawn feature. Elevation
+  tint and contour lines are in the Table Of Contents.
   Saving rebuilds the AI route map when terrain or objects changed, so AI
   tanks drive around them.
 - F5 starts the game.
