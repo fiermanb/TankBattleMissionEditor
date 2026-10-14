@@ -1,10 +1,9 @@
 # Tank Battle Classic Mission Editor
 
-Mission and map editor for the Windows game *Tank Battle Classic* (Steam). Edits your 
-own installed copy. This unofficial application does not contain any game content and 
-is not affiliated with the game's developer or publisher. Buy the game from 
+Mission and map editor for the Windows game *Tank Battle Classic* (Steam). Edits your
+own installed copy. This unofficial application does not contain any game content and
+is not affiliated with the game's developer or publisher. Buy the game from
 https://store.steampowered.com/app/5086560/Tank_Battle_Classic/
-
 
 ![Main window: mission map with a selected tank and its route, layers, spawn table and properties](docs/screenshot-main.png)
 
@@ -42,29 +41,32 @@ button returns to Select / move.
 | --- | --- |
 | Click / Shift+click / Ctrl+click | select / add / toggle |
 | Drag on empty map / drag selection (Select / move) | selection box / move |
-| Right-click | context menu; finishes a route or terrain feature being drawn |
+| Right-click | context menu; finishes a drawing |
 | Wheel / middle or right drag, or Space held | zoom / pan (in any tool) |
-| Backspace / Esc while drawing a route or terrain feature | remove the last point / cancel |
+| Drag (Draw terrain) | draw freehand |
+| Double-click or Enter / Backspace / Esc while drawing | finish / remove the last point / cancel |
+| Double-click a feature's line (Edit terrain features) | add a point |
 | Ctrl+X / C / V | cut / copy / paste (at the pointer) |
 | Del, Ctrl+D, Q / E | delete, duplicate, rotate |
 | Ctrl+Z, Ctrl+S, Ctrl+A | undo, save, select all |
-| Esc | cancel a drawing or selection box in progress, else clear a selected terrain feature, else back to Select / move, else clear the selection |
+| Esc | cancel; else deselect; else back to Select / move |
 
 Help > Controls lists all shortcuts.
 
-## Backups
+## Backups and removal
 
 The first save of a level keeps the original (File > Restore original).
-Scenario > Remove scenario (or right-click it in the Catalog) removes one
-scenario; Scenario > Remove all custom scenarios undoes all. Steam's "Verify
-integrity of game files" also restores everything.
+
+Scenario > Remove scenario removes one scenario (also: right-click it in the
+Catalog). Scenario > Remove all custom scenarios removes all of them and undoes
+text changes to the original missions. Steam's "Verify integrity of game
+files" restores the game.
 
 Backups and settings are kept next to the program, in `backups\` and
 `settings.json` (Help > Open backup folder). To update, unzip the new version
 over the old `TankBattleMissionEditor` folder; the backups stay. If the program
 folder cannot be written (for example under Program Files), the editor uses
-`%LOCALAPPDATA%\TankBattleMissionEditor` instead. Data of earlier versions in
-that folder is moved next to the program once.
+`%LOCALAPPDATA%\TankBattleMissionEditor` instead.
 
 Custom scenarios are backed up on every save. A game update removes them from
 the game; the editor then offers to restore them, converted to the new game
@@ -73,21 +75,20 @@ version (also: Scenario > Restore scenarios from backup).
 Scenario > Export scenario saves a scenario as one `.tbscenario` file to share;
 Scenario > Import scenario installs one. The file holds no game files, only the
 map and the names of the game assets it uses: the recipient needs the game and
-this editor, in any game version. Deleted objects, including the switched-off
-objects of the mission a scenario was made from, are left out of the file.
+this editor, also after a game update. Deleted objects, including the
+switched-off objects of the mission a scenario was made from, are left out.
 
 ## Included scenarios
 
 Two scenarios made with the editor come with it (`Scenarios` folder of the
 release, `scenarios/` in the source). Install them with Scenario > Import
-scenario.
+scenario; they appear on the Custom Missions page.
 
 - **Kursk - Deep Defense**: July 1943. Hold three trench lines with a T-34
-  company against three German waves of 125 tanks after an artillery barrage;
-  the defenders fall back when a line is breached.
-- **Kursk - Breakthrough**: the same battlefield from the other side. Attack
-  with the first German wave in a Panzer IV and break through all three
-  Soviet lines.
+  company against 125 German tanks in three waves. Defenders fall back when a
+  line is breached.
+- **Kursk - Breakthrough**: the same battle from the German side. Attack in a
+  Panzer IV and break through all three Soviet lines.
 
 Both offer every tank of the game as the player's tank.
 
@@ -100,6 +101,8 @@ Both offer every tank of the game as the player's tank.
 - Saving a custom scenario rebuilds its AI route map when terrain or objects
   changed. The rebuilt map is close to the game's own; in dense city and
   mountain areas AI routes can differ.
+- Event messages longer than 45 characters can be cut off in the game.
+- The briefing screen lists at most 9 unit groups.
 - After a game update, objects whose scripts changed cannot be edited until a
   new version of the editor is released.
 
