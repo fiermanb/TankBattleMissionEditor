@@ -20,7 +20,9 @@ WHAT IT DOES
 ------------
 - Move, rotate, add, copy and delete tanks, waypoints and scenery.
 - Tank settings: type, side, AI behaviour, respawns, unit group, follow target.
-- Mission settings (nothing selected): fog, visibility, recon plane.
+- Mission settings (nothing selected): lighting (day, dusk or night for
+  custom scenarios), fog, visibility, recon plane.
+- Events: Properties show only the fields of the event's type and trigger.
 - Objects pane: new tanks, routes, waypoints, events, trigger areas and
   objects from any mission. Click an item to choose the Add tool for it, then
   click on the map to place one with each click (or drag an item onto the
@@ -38,8 +40,8 @@ WHAT IT DOES
   Saving rebuilds the AI route map when terrain or objects changed, so AI
   tanks drive around them.
 - F5 starts the game.
-- Tables of spawns, events, waypoints and scenery: double-click a cell to
-  edit it.
+- Tables of spawns, events, waypoints, scenery and terrain features:
+  double-click a cell to edit it.
 - New scenarios from a mission or on an empty terrain (Scenario menu); they
   appear on a "Custom Missions" page.
 
