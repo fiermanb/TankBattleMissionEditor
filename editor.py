@@ -113,8 +113,6 @@ TOC_LAYERS = [
 ]
 TOC_DEFAULT_OFF = {"Deleted", "Elevation", "Contours", "NavMesh"}
 TOC_OVERLAYS = {"Elevation", "Contours", "NavMesh"}
-OBJ_HINT = ("Click an item to choose the Add tool for it, then click on the map to place one with each "
-            "click. Dragging an item onto the map places one directly.")
 DOUBLE_CLICK_MS = 400
 EVENT_MARK = 18
 
@@ -131,7 +129,7 @@ ADD_BUTTONS = {("spawn", 1): "add:hostile", ("spawn", 0): "add:friendly", ("rout
                ("waypoint",): "add:waypoint"}
 TOOL_NAMES = {"select": "Select / move", "pan": "Pan", "zoomin": "Zoom in", "zoomout": "Zoom out",
               "rotate": "Rotate", "feature": "Draw terrain", "vertex": "Edit terrain features", "add": "Add",
-              "pick": "Pick on map"}
+              "pick": "Select on map"}
 TERRAIN_TOOLS = ("feature", "vertex")
 FREEHAND_PX = 6
 BRUSH_PARAMS = (("width", "Width", "m", "Width at ground level"),
@@ -1831,7 +1829,7 @@ class EditorApp:
         self.obj_build_btn = ttk.Button(bottom, text="Build object library", command=self.build_library)
         self.obj_place_btn = ttk.Button(bottom, text="Place at map centre", command=self.place_selected_object)
         self.obj_place_btn.pack(side="left")
-        self.obj_hint = tk.Label(body, text=OBJ_HINT, anchor="w", justify="left", fg="#404040", wraplength=250)
+        self.obj_hint = tk.Label(body, text="", anchor="w", justify="left", fg="#404040", wraplength=250)
         self.obj_hint.pack(side="bottom", fill="x", padx=4)
         holder = bordered(body)
         holder.pack(fill="both", expand=True, padx=2, pady=2)
@@ -2570,7 +2568,9 @@ class EditorApp:
         sid = s["id"]
         self.prop_info("Feature", f"#{sid} {self.feature_name(s)}")
         n = len(s["points"])
-        self.prop_info("Points", f"{n}, {length(s['points']):.0f} m long" if n > 1 else "1 (a single stamp)")
+        self.prop_info("Points", str(n))
+        if n > 1:
+            self.prop_info("Length (m)", f"{length(s['points']):.0f}")
         self.prop_combo("Kind", [KIND_NAMES[k] for k in KINDS], KINDS.index(s["kind"]),
                         lambda i: self.set_feature_param(sid, "kind", KINDS[i]))
         for key, text, unit, _ in BRUSH_PARAMS:
@@ -2584,9 +2584,6 @@ class EditorApp:
         self.prop_combo("Texture", ["(none)"] + [layer_label(x) for x in names],
                         0 if tex is None or tex >= len(names) else tex + 1,
                         lambda i: self.set_feature_param(sid, "texture", None if i == 0 else i - 1))
-        note = self.ai_note(s).strip()
-        if note:
-            self.prop_info("AI", note)
         r = self._next()
         ttk.Button(self.props, text="Delete feature", command=self.delete_feature).grid(
             row=r, column=1, sticky="w", pady=(6, 0))
@@ -2731,11 +2728,11 @@ class EditorApp:
                 self.obj_hint.config(text=self.library_progress_text())
             else:
                 self.obj_build_btn.pack(side="left")
-                self.obj_hint.config(text="The object library is built once by scanning the original missions.")
+                self.obj_hint.config(text="")
             return
         self.obj_build_btn.pack_forget()
         self.obj_place_btn.pack(side="left")
-        self.obj_hint.config(text=OBJ_HINT)
+        self.obj_hint.config(text="")
         cats = {}
         for i, e in enumerate(lib.entries):
             if f and f not in e["name"].lower() and f not in e["category"].lower():
@@ -3438,7 +3435,7 @@ class EditorApp:
 
     def tool_title(self):
         if self.tool == "pick" and getattr(self, "pick", None):
-            return f"Pick {self.pick['title'].lower()}"
+            return f"Select {self.pick['title'].lower()} on map"
         return f"Add {self.add_item[2]}" if self.tool == "add" else TOOL_NAMES[self.tool]
 
     def cursor(self):
@@ -3469,7 +3466,7 @@ class EditorApp:
             return f"Add {title}: click on the map to place one."
         if tool == "pick" and getattr(self, "pick", None):
             what = "an area" if self.pick["kind"] == "areas" else "a tank"
-            return (f"{self.tool_title()} for {self.model.name(self.model.event_go[self.pick['ev']])}: click "
+            return (f"{self.tool_title()} ({self.model.name(self.model.event_go[self.pick['ev']])}): click "
                     f"{what} to add or remove it.")
         if tool == "feature":
             return (f"Draw terrain with '{self.brush['name']}': click points or drag to draw; right-click, "
@@ -4682,7 +4679,7 @@ class EditorApp:
                  if r["m_FileID"] == 0 and r["m_PathID"] in owner]
         self.prop_info(title, summary(names, "none"), tip=tip)
         r = self._next()
-        ttk.Button(self.props, text="Choose events...",
+        ttk.Button(self.props, text="From list...",
                    command=lambda: self.choose_events(ev, key, count_key, title)).grid(row=r, column=1, sticky="w",
                                                                                       pady=(0, 4))
 
@@ -4728,10 +4725,10 @@ class EditorApp:
         r = self._next()
         cell = tk.Frame(self.props, bg=FACE)
         cell.grid(row=r, column=1, sticky="w", pady=(0, 4))
-        ttk.Button(cell, text="Choose...", command=choose).pack(side="left")
-        btn = ttk.Button(cell, text="Pick on map", command=pick)
+        ttk.Button(cell, text="From list...", command=choose).pack(side="left")
+        btn = ttk.Button(cell, text="On map", command=pick)
         btn.pack(side="left", padx=(4, 0))
-        ToolTip(btn, "Click tanks or areas on the map to add or remove them")
+        ToolTip(btn, "Click on the map to add or remove; Esc ends")
 
     # ---- picking the tanks and areas of an event on the map ----------------
 
@@ -4879,7 +4876,7 @@ class EditorApp:
     def event_props(self, ev):
         """Properties of an event, built from the description of its type and
         trigger (event_types.py): only fields that do something in the game,
-        in the sections Event, What it does, When, Message and Links."""
+        in the groups Action, Trigger, Message and Relations."""
         m = self.model
         d = m.sc.read(ev)
         t, trig = d["Event_Type"], d["Trigger_Type"]
@@ -4889,10 +4886,11 @@ class EditorApp:
             types.append(t)
             names.append(f"Type {t}")
         self.prop_combo("Event type", names, types.index(t),
-                        lambda i: self.op("Set event type", m.set_field, ev, "Event_Type", types[i]))
+                        lambda i: self.op("Set event type", m.set_field, ev, "Event_Type", types[i]),
+                        tip=et.EVENT_HELP.get(t))
         self.prop_enabled(ev)
 
-        self.prop_heading("What it does", et.EVENT_HELP.get(t))
+        self.prop_heading("Action")
         if t in et.TARGET_TYPES:
             self.prop_tanklist("Affected tanks", ev, "Target_Tanks", "Target_Num")
         if t == 2:
@@ -4905,18 +4903,19 @@ class EditorApp:
         if t == 12:
             self.prop_info("Object", self.ref_name(d.get("Activation_Object")))
         self.schema_rows(ev, et.TYPE_FIELDS.get(t, []))
-        self.prop_eventlist("Also cancels", ev, "Useless_Events", "Useless_Event_Num",
-                            tip="Events that will no longer fire once this event has fired (for example, "
-                                "'Mission complete' cancels 'Mission failed')")
+        self.prop_eventlist("Cancels events", ev, "Useless_Events", "Useless_Event_Num",
+                            tip="Events that no longer fire after this event (for example 'Mission complete' "
+                                "cancels 'Mission failed')")
 
-        self.prop_heading("When", et.TRIGGER_HELP.get(trig))
+        self.prop_heading("Trigger")
         trigs = sorted(et.TRIGGER_NAMES)
         if trig not in trigs:
             trigs.append(trig)
-        self.prop_combo("Trigger", [et.TRIGGER_NAMES.get(k, f"Type {k}") for k in trigs], trigs.index(trig),
-                        lambda i: self.op("Set trigger", m.set_field, ev, "Trigger_Type", trigs[i]))
+        self.prop_combo("Type", [et.TRIGGER_NAMES.get(k, f"Type {k}") for k in trigs], trigs.index(trig),
+                        lambda i: self.op("Set trigger", m.set_field, ev, "Trigger_Type", trigs[i]),
+                        tip=et.TRIGGER_HELP.get(trig))
         if trig == 0:
-            self.prop_entry("After (s)", f"{d['Trigger_Time']:g}",
+            self.prop_entry("Time (s)", f"{d['Trigger_Time']:g}",
                             lambda s: self.op("Set trigger time", m.set_field, ev, "Trigger_Time", _number(s)),
                             tip="Seconds after the event is enabled")
         if trig == 2:
@@ -4926,28 +4925,29 @@ class EditorApp:
             self.prop_combo("Tanks that count", [et.AREA_TANKS[k] for k in keys], keys.index(cur) if cur in keys
                             else -1, lambda i: self.op("Set tanks that count", m.set_field, ev,
                                                        "Trigger_Setting_Type", keys[i]),
-                            tip="Hostile and friendly are seen from the player")
+                            tip="Hostile and friendly as seen from the player")
         if et.uses_tank_list(d):
             self.prop_tanklist("Trigger tanks", ev, "Trigger_Tanks", "Trigger_Num")
             modes = ["all", "any", "count"] if trig == 1 else ["all", "any"]
             mode, number = et.tanks_needed(d)
-            self.prop_combo("Tanks needed", [et.NEEDED[k] for k in modes], modes.index(mode) if mode in modes
+            self.prop_combo("Required", [et.NEEDED[k] for k in modes], modes.index(mode) if mode in modes
                             else 0, lambda i: self.set_tanks_needed(ev, modes[i]))
             if mode == "count" and trig == 1:
-                self.prop_entry("Number needed", str(number), lambda s: self.set_tanks_needed(ev, "count", int(s)))
+                self.prop_entry("Number required", str(number),
+                                lambda s: self.set_tanks_needed(ev, "count", int(s)))
 
         if et.shows_message(t):
             self.prop_heading("Message")
             text = d.get("Event_Message", "")
             self.prop_entry("Text", text, lambda s: self.set_message(ev, s),
-                            tip="The Japanese text is set to the same text")
+                            tip="Also used as the Japanese text")
             n = len(text)
             over = n > et.MESSAGE_LIMIT
             self.prop_info("Length", f"{n} of {et.MESSAGE_LIMIT} characters" + (": may be cut off" if over else ""),
                            fg=WARN_FG if over else "#404040")
             self.schema_rows(ev, et.MESSAGE_FIELDS)
 
-        self.prop_heading("Links", "Events that refer to this one.")
+        self.prop_heading("Relations")
         enabled_by, cancelled_by = self.event_links(ev)
         self.prop_info("Enabled by", summary(enabled_by, "none"))
         self.prop_info("Cancelled by", summary(cancelled_by, "none"))
@@ -6047,10 +6047,9 @@ class EditorApp:
             if key:
                 same = [e for e in m.spawns if m.sc.read(e)["Key_Name"] == key and m.active(m.event_go[e])]
                 kinds = {m.sc.read(e)["Tank_Prop"]["m_PathID"] for e in same}
-                note = f"{len(same)} unit(s) in this group"
-                if len(kinds) > 1:
-                    note += "; mixed tank types - the briefing screen sets one type per group"
-                self.prop_info("Group", note)
+                note = f"{len(same)} units" + ("; mixed tank types" if len(kinds) > 1 else "")
+                self.prop_info("Group", note, fg=WARN_FG if len(kinds) > 1 else "#404040",
+                               tip="The briefing screen offers one tank type per group" if len(kinds) > 1 else None)
             self.transform_rows(go)
             packs = [0] + m.packs
             pnames = ["(none)"] + [m.name(m.go_of_tr[p]) for p in m.packs]
@@ -6145,10 +6144,6 @@ class EditorApp:
         self.mission_field_rows(False)
         ai = [e for e in m.events if m.sc.read(e)["Event_Type"] == 2]
         self.prop_info("AI changes", ", ".join(m.name(m.event_go[e]) for e in ai) or "none")
-        self.prop_info("Hint", "Visibility sets how far tanks can see each other. 'Change lighting' events "
-                               "(Table - Events) change fog density and visibility during the mission. Allied "
-                               "groups: select the tanks and set a follow target (for example the Player) and "
-                               "distance in Properties.")
         self.prop_sep()
         self.prop_info("Spawns", str(len(m.spawns)))
         self.prop_info("Other events", str(len(m.events) - len(m.spawns)))
@@ -6196,7 +6191,7 @@ class EditorApp:
         """Mission settings: the lighting preset and values (custom scenarios)."""
         lt = self.lighting_session()
         if lt is None:
-            self.prop_info("Lighting", "Day, dusk and night: custom scenarios only.")
+            self.prop_info("Lighting", "Custom scenarios only")
             return
         try:
             cur, preset = lt.lighting(), lt.preset()
@@ -6288,13 +6283,10 @@ class EditorApp:
             kinds[self.kind(g)] = kinds.get(self.kind(g), 0) + 1
         for k, n in sorted(kinds.items()):
             self.prop_info(k.capitalize() + "s", str(n))
-        self.prop_info("Edit", "Drag, rotate (Q / E or the Rotate tool), copy, cut, paste, duplicate and delete "
-                               "act on the whole selection.")
         evs = [m.event_of_go(g) for g in sel if self.kind(g) == "spawn"]
         if len(evs) != len(sel):
             return
-        self.prop_sep()
-        self.prop_label("Set for all selected tanks:")
+        self.prop_heading("Selected tanks")
         names = [tank_display(t) for t in m.tanks]
         cur = {m.tank_entry(e) for e in evs}
         one = cur.pop() if len(cur) == 1 else None
@@ -6353,13 +6345,10 @@ class EditorApp:
         if tip:
             ToolTip(lbl, tip)
 
-    def prop_heading(self, text, note=None):
-        """A section heading, with an optional explanation below it."""
+    def prop_heading(self, text):
+        """A group heading."""
         tk.Label(self.props, text=text, font=UI_BOLD, anchor="w").grid(
             row=self._next(), column=0, columnspan=2, sticky="w", pady=(8, 0))
-        if note:
-            tk.Label(self.props, text=note, anchor="w", justify="left", wraplength=300, fg="#505050").grid(
-                row=self._next(), column=0, columnspan=2, sticky="w", pady=(0, 2))
 
     def prop_entry(self, name, value, commit, tip=None):
         r = self._next()

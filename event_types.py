@@ -30,23 +30,22 @@ EVENT_NAMES = {1: "Show message", 2: "Change AI settings", 3: "Remove tanks", 4:
                6: "Destroy target", 7: "Change lighting", 10: "Mission complete", 11: "Mission failed",
                12: "Activate object", 13: "Enable events"}
 EVENT_HELP = {
-    1: "Shows a message.",
-    2: "Gives the affected tanks new AI settings. All values below are applied, not only changed ones.",
-    3: "Removes the affected tanks from the battle.",
+    1: "Displays a message.",
+    2: "Applies new AI settings to the affected tanks. All values are applied.",
+    3: "Removes the affected tanks.",
     4: "Fires an artillery barrage.",
     6: "Destroys the affected tanks.",
-    7: "Changes fog density and visibility over a set time.",
-    10: "Ends the mission as won and shows the message.",
-    11: "Ends the mission as lost and shows the message.",
-    12: "Switches an object in the scene on or off.",
-    13: "Starts events that are not enabled at start; their timers begin now.",
+    7: "Changes fog density and visibility over the given time.",
+    10: "Ends the mission as won; displays the message.",
+    11: "Ends the mission as lost; displays the message.",
+    12: "Switches an object on or off.",
+    13: "Enables events that are disabled at start; their timers start then.",
 }
 TRIGGER_NAMES = {0: "Timer", 1: "Tanks destroyed", 2: "Tank in trigger area"}
 TRIGGER_HELP = {
-    0: "Fires the given number of seconds after the event is enabled: at the start of the mission, or "
-       "when an 'Enable events' event enables it.",
-    1: "Fires when the listed tanks are destroyed (all, any, or a number of them).",
-    2: "Fires when a tank enters one of the trigger areas.",
+    0: "Time after the event is enabled (mission start or an Enable events event).",
+    1: "Destruction of the listed tanks (all, any or a number of them).",
+    2: "A tank entering one of the trigger areas.",
 }
 AREA_TANKS = {0: "Listed tanks", 1: "Any hostile tank", 2: "Any friendly tank"}
 NEEDED = {"all": "All listed tanks", "any": "Any listed tank", "count": "A number of them"}
