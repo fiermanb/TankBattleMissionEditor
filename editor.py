@@ -22,7 +22,7 @@ import sys
 import tempfile
 import time
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import colorchooser, filedialog, messagebox, ttk
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageTk
@@ -178,9 +178,15 @@ SPAWN_FIELDS = [
 ]
 AREA_FIELDS = [("Tanks that count", "Trigger_Setting_Type", TRIGGER_SETTINGS)]
 FOG_KEYS = ("m_Fog", "m_FogDensity", "m_FogColor", "Current_Visibility", "Dust_Particle_Multiplier")
-LIGHTING_FIELDS = [("Sun / moon colour", "sun_colour", "colour"), ("Sun / moon intensity", "sun_intensity", "float"),
-                   ("Ambient light", "ambient", "colour"), ("Sky brightness", "sky_brightness", "float"),
-                   ("Sky colour", "sky_colour", "colour")]
+LIGHTING_FIELDS = [
+    ("Sun / moon colour", "sun_colour", "colour", "Colour of the sunlight or moonlight; its strength is the intensity"),
+    ("Sun / moon intensity", "sun_intensity", "float", "Strength of the sunlight or moonlight; day 1-3, night 0.2"),
+    ("Ambient light", "ambient", "dimcolour",
+     "Light in the shadows: its colour, and its brightness in percent (night: a dim blue)"),
+    ("Sky brightness", "sky_brightness", "float", "1 = the day sky; night 0.08"),
+    ("Sky colour", "sky_colour", "colour", "Tint of the sky; white leaves it unchanged")]
+FOG_TIPS = {"m_FogColor": "Colour the distance fades to, and its brightness in percent (night: a dark blue)",
+            "m_FogDensity": "0.0005 light haze, 0.002 night haze, 0.01-0.025 dense fog"}
 MISSION_FIELDS = [
     ("RenderSettings", None, "Fog", "m_Fog", "bool"),
     ("RenderSettings", None, "Fog density", "m_FogDensity", "float"),
@@ -190,6 +196,24 @@ MISSION_FIELDS = [
     ("MonoBehaviour", "Game_Controller_CS", "Recon plane available", "Available_Recon_Plane", "bool"),
     ("MonoBehaviour", "Score_Manager_CS", "Assist score", "Enable_Assist_Score", "bool"),
 ]
+
+
+def split_colour(rgb):
+    """((r, g, b) at full brightness, brightness 0..1) of a colour: the
+    brightness is its strongest channel. Black is white at brightness 0."""
+    level = max(rgb) if rgb else 0.0
+    if level <= 0:
+        return (1.0, 1.0, 1.0), 0.0
+    return tuple(min(1.0, c / level) for c in rgb), min(1.0, level)
+
+
+def compose_colour(hue, level):
+    """The colour `hue` (at full brightness) at brightness `level` 0..1."""
+    return tuple(c * level for c in hue)
+
+
+def colour_hex(rgb):
+    return "#%02X%02X%02X" % tuple(int(round(min(1.0, max(0.0, c)) * 255)) for c in rgb)
 
 
 def summary(names, empty="none", limit=6):
@@ -5992,14 +6016,17 @@ class EditorApp:
             if pid is None or key not in m.sc.read(pid):
                 continue
             val = m.sc.read(pid)[key]
+            tip = FOG_TIPS.get(key)
             if kind == "bool":
-                self.prop_check(title, val, lambda v, p=pid, k=key: self.op(f"Set {k}", m.set_field, p, k, v))
+                self.prop_check(title, val, lambda v, p=pid, k=key: self.op(f"Set {k}", m.set_field, p, k, v),
+                                tip=tip)
             elif kind == "float":
-                self.prop_entry(title, f"{val:g}", lambda s, p=pid, k=key: self.op(f"Set {k}", m.set_field, p, k, float(s)))
+                self.prop_entry(title, f"{val:g}", lambda s, p=pid, k=key: self.op(f"Set {k}", m.set_field, p, k,
+                                                                                float(s)), tip=tip)
             elif kind == "colour":
-                hexv = "#%02X%02X%02X" % tuple(int(round(val[c] * 255)) for c in "rgb")
-                self.prop_entry(title, hexv, lambda s, p=pid, k=key, a=val.get("a", 1.0):
-                                self.op(f"Set {k}", m.set_field, p, k, self.parse_colour(s, a)))
+                self.prop_colour(title, _rgb_of(val), lambda rgb, p=pid, k=key, a=val.get("a", 1.0): self.op(
+                    f"Set {k}", m.set_field, p, k, {"r": rgb[0], "g": rgb[1], "b": rgb[2], "a": a}),
+                    brightness=True, tip=tip)
 
     def lighting_session(self):
         """Lighting of the open custom scenario (its source mission gives the
@@ -6031,15 +6058,14 @@ class EditorApp:
         keys = ["day", "dusk", "night", "custom"]
         self.prop_combo("Lighting", names, keys.index(preset),
                         lambda i: self.set_lighting_preset(keys[i]) if keys[i] != "custom" else None)
-        for title, key, kind in LIGHTING_FIELDS:
+        for title, key, kind, tip in LIGHTING_FIELDS:
             v = cur[key]
-            if kind == "colour":
-                text = "#%02X%02X%02X" % tuple(int(round(min(1.0, max(0.0, c)) * 255)) for c in v)
-                self.prop_entry(title, text, lambda s, k=key: self.set_lighting(
-                    {k: _rgb_of(self.parse_colour(s))}, label=f"Set {k}"))
+            if kind in ("colour", "dimcolour"):
+                self.prop_colour(title, v, lambda rgb, k=key: self.set_lighting({k: rgb}, label=f"Set {k}"),
+                                 brightness=kind == "dimcolour", tip=tip)
             else:
                 self.prop_entry(title, f"{v:g}", lambda s, k=key: self.set_lighting(
-                    {k: _positive(s)}, label=f"Set {k}"))
+                    {k: _positive(s)}, label=f"Set {k}"), tip=tip)
 
     def set_lighting(self, values, preset=False, label="Lighting"):
         """Change lighting values of the open custom scenario (one undo step)."""
@@ -6068,14 +6094,6 @@ class EditorApp:
         else:
             self.set_lighting(dict(PRESETS[name]), preset=True, label=f"Lighting: {PRESET_NAMES[name]}")
         self.status(f"Lighting: {PRESET_NAMES[name]}. Save to see it in the game.", "ok")
-
-    @staticmethod
-    def parse_colour(text, alpha=1.0):
-        t = text.strip().lstrip("#")
-        if len(t) != 6 or any(ch not in "0123456789abcdefABCDEF" for ch in t):
-            raise ValueError("use #RRGGBB")
-        r, g, b = (int(t[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
-        return {"r": r, "g": g, "b": b, "a": alpha}
 
     def spawn_ref_options(self, exclude=None):
         """[(label, transform pid)] of tank spawns for follow / commander references."""
@@ -6221,6 +6239,56 @@ class EditorApp:
         ent.bind("<FocusOut>", apply)
         self.props.columnconfigure(1, weight=1)
         return ent
+
+    def prop_colour(self, name, rgb, commit, brightness=False, tip=None):
+        """A colour field: a button showing the colour at full brightness, which
+        opens the Windows colour picker, and with brightness=True the
+        brightness in percent beside it. commit gets the new (r, g, b)."""
+        r = self._next()
+        lbl = tk.Label(self.props, text=name, anchor="w")
+        lbl.grid(row=r, column=0, sticky="w", padx=(0, 6), pady=1)
+        if tip:
+            ToolTip(lbl, tip)
+        hue, level = split_colour(rgb)
+        if not brightness:
+            hue, level = tuple(min(1.0, max(0.0, c)) for c in rgb), 1.0
+        cell = tk.Frame(self.props, bg=FACE)
+        cell.grid(row=r, column=1, sticky="w", pady=1)
+        hexv = colour_hex(hue)
+        btn = tk.Button(cell, bg=hexv, activebackground=hexv, width=6, relief="groove", bd=2, cursor="hand2")
+        btn.pack(side="left")
+        ToolTip(btn, f"{colour_hex(rgb)}: click to choose a colour")
+
+        def pick():
+            got = colorchooser.askcolor(color=hexv, parent=self.root, title=name)
+            if got and got[0]:
+                chosen = tuple(c / 255.0 for c in got[0])
+                commit(compose_colour(split_colour(chosen)[0], level) if brightness else chosen)
+        btn.config(command=pick)
+        if brightness:
+            var = tk.StringVar(value=f"{level * 100:.0f}")
+            ent = ttk.Entry(cell, textvariable=var, width=5)
+            ent.pack(side="left", padx=(6, 2))
+            tk.Label(cell, text="%", bg=FACE).pack(side="left")
+            state = {"done": False}
+
+            def apply(_e=None):
+                if state["done"]:
+                    return
+                try:
+                    pct = float(var.get().strip().replace(",", ".").rstrip("%"))
+                except ValueError:
+                    self.status(f"Invalid value for {name}: '{var.get()}'", "warn")
+                    var.set(f"{level * 100:.0f}")
+                    return
+                if abs(pct / 100.0 - level) < 0.0005 or pct < 0:
+                    return
+                state["done"] = True
+                commit(compose_colour(hue, min(100.0, pct) / 100.0))
+            ent.bind("<Return>", apply)
+            ent.bind("<FocusOut>", apply)
+        self.props.columnconfigure(1, weight=1)
+        return btn
 
     def prop_check(self, name, value, commit, tip=None):
         r = self._next()

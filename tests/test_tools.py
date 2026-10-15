@@ -245,6 +245,24 @@ class ToolTest(unittest.TestCase):
             app.undo()
         app.select(None)
 
+    def test_colour_fields(self):
+        hue, level = editor.split_colour((0.036, 0.042, 0.065))
+        self.assertAlmostEqual(level, 0.065)
+        self.assertAlmostEqual(max(hue), 1.0)
+        self.assertGreater(hue[2], hue[0], "a dim blue shows as a clear blue")
+        back = editor.compose_colour(hue, level)
+        for a, b in zip(back, (0.036, 0.042, 0.065)):
+            self.assertAlmostEqual(a, b)
+        self.assertEqual(editor.split_colour((0, 0, 0)), ((1.0, 1.0, 1.0), 0.0))
+        self.assertEqual(editor.colour_hex((1.0, 0.5, 0.0)), "#FF8000")
+        app = self.app
+        app.select(None)
+        app.refresh_props()
+        self.root.update()
+        rows = [w for w in app.props.winfo_children() if isinstance(w, tk.Frame)
+                and any(isinstance(c, tk.Button) for c in w.winfo_children())]
+        self.assertTrue(rows, "the fog colour is a colour button")
+
     def test_clear_selection(self):
         app, m = self.app, self.app.model
         go = m.event_go[m.spawns[0]]
