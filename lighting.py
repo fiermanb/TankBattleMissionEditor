@@ -21,7 +21,11 @@ fog in the fog missions), and 'Change lighting' events change its density and
 the visibility during a mission. A preset never raises the visibility, so
 night on a fog scenario keeps its short visibility. Dust particles are not
 darkened by the light, so the darker presets turn them down (the fog missions
-use 0.1 too).
+use 0.1 too). Night switches the fog on and raises its density to at least
+0.002: the dark fog takes the daytime green out of the distant terrain and
+joins it to the night sky (tested in the game, Kursk - Deep Defense). The
+bluish moonlight and ambient light take the olive out of the near ground
+without turning the tanks purple (a stronger blue did).
 
 Day is the lighting of the mission the scenario was made from. The sky copy is
 not part of the battle scene, so backups record it (sky_record()) and a
@@ -38,9 +42,9 @@ PRESETS = {
     "dusk": {"sun_colour": (0.78, 0.82, 0.95), "sun_intensity": 0.3, "ambient": (0.06, 0.062, 0.072),
              "fog_colour": (0.03, 0.035, 0.05), "sky_brightness": 0.12, "sky_colour": (0.72, 0.8, 1.0),
              "visibility": 1000.0, "dust": 0.3},
-    "night": {"sun_colour": (0.78, 0.82, 0.95), "sun_intensity": 0.18, "ambient": (0.04, 0.042, 0.05),
-              "fog_colour": (0.03, 0.035, 0.05), "sky_brightness": 0.08, "sky_colour": (0.72, 0.8, 1.0),
-              "visibility": 600.0, "dust": 0.1},
+    "night": {"sun_colour": (0.66, 0.74, 1.0), "sun_intensity": 0.18, "ambient": (0.036, 0.042, 0.065),
+              "fog_colour": (0.047, 0.063, 0.094), "sky_brightness": 0.08, "sky_colour": (0.72, 0.8, 1.0),
+              "visibility": 600.0, "dust": 0.1, "fog_density": 0.002},
 }
 PRESET_NAMES = {"day": "Day", "dusk": "Dusk", "night": "Night", "custom": "Custom"}
 NIGHT_REFLECTION = 0.1
@@ -124,7 +128,8 @@ class Lighting:
         tint = _rgb(colours.get("_Tint", {"r": 0.5, "g": 0.5, "b": 0.5}))
         return {"sun_colour": _rgb(s["m_Color"]), "sun_intensity": float(s["m_Intensity"]),
                 "ambient": _rgb(r["m_AmbientSkyColor"]), "ambient_mode": r["m_AmbientMode"],
-                "fog_colour": _rgb(r["m_FogColor"]), "sky_brightness": float(floats.get("_Exposure", 1.0)),
+                "fog_colour": _rgb(r["m_FogColor"]), "fog_density": float(r["m_FogDensity"]),
+                "fog_on": bool(r["m_Fog"]), "sky_brightness": float(floats.get("_Exposure", 1.0)),
                 "sky_colour": tuple(min(1.0, x * 2) for x in tint),
                 "visibility": float(c["Current_Visibility"]) if "Current_Visibility" in c else None,
                 "dust": float(c["Dust_Particle_Multiplier"]) if "Dust_Particle_Multiplier" in c else None}
@@ -179,6 +184,8 @@ class Lighting:
             for k in ("visibility", "dust"):
                 if cur.get(k) is not None and v.get(k) is not None:
                     v[k] = min(cur[k], v[k])
+            if v.get("fog_density") is not None:
+                v["fog_density"] = max(cur["fog_density"], v["fog_density"])
         m = self.m
         sun, rs, ctrl = self.parts(m.sc)
         if "sun_colour" in v or "sun_intensity" in v:
@@ -190,8 +197,11 @@ class Lighting:
             if preset:
                 d["m_Shadows"] = dict(d["m_Shadows"], m_Strength=NIGHT_SHADOW_STRENGTH)
             m._set(sun, d)
-        if "ambient" in v or "fog_colour" in v or "sky_brightness" in v:
+        if "ambient" in v or "fog_colour" in v or "sky_brightness" in v or "fog_density" in v:
             d = m.edit(rs)
+            if "fog_density" in v:
+                d["m_Fog"] = True
+                d["m_FogDensity"] = float(v["fog_density"])
             if "ambient" in v:
                 d["m_AmbientMode"] = 3
                 for key in ("m_AmbientSkyColor", "m_AmbientEquatorColor", "m_AmbientGroundColor"):
@@ -272,7 +282,8 @@ class Lighting:
         d = m.edit(rs)
         src = self.day.read(drs)
         for k in ("m_AmbientMode", "m_AmbientSkyColor", "m_AmbientEquatorColor", "m_AmbientGroundColor",
-                  "m_AmbientIntensity", "m_AmbientProbe", "m_FogColor", "m_ReflectionIntensity"):
+                  "m_AmbientIntensity", "m_AmbientProbe", "m_Fog", "m_FogDensity", "m_FogColor",
+                  "m_ReflectionIntensity"):
             d[k] = copy.deepcopy(src[k])
         f, pid = self.day_sky()
         d["m_SkyboxMaterial"] = {"m_FileID": m.sc.ensure_external_path(f), "m_PathID": pid}

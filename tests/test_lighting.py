@@ -58,6 +58,8 @@ class LightingTest(unittest.TestCase):
         self.assertIsNotNone(lt.own_sky(), "the sky is the scenario's own copy")
         self.assertAlmostEqual(lt.lighting()["sky_brightness"], 0.08, places=4)
         self.assertEqual(lt.lighting()["visibility"], 600.0)
+        self.assertTrue(lt.lighting()["fog_on"])
+        self.assertAlmostEqual(lt.lighting()["fog_density"], 0.002, places=5, msg="night raises a light haze")
         m.undo()
         self.assertEqual(lt.preset(), "day", "undo brings the day back")
         self.assertIsNone(lt.own_sky())
@@ -91,6 +93,8 @@ class LightingTest(unittest.TestCase):
         m2.commit()
         self.assertEqual(lt2.preset(), "day")
         self.assertEqual(lt2.lighting()["visibility"], day["visibility"])
+        self.assertAlmostEqual(lt2.lighting()["fog_density"], day["fog_density"], places=6,
+                               msg="day restores the fog density")
 
     def test_night_keeps_the_fog_visibility(self):
         entry = self.scenario("23_Open_Field_Intercept_Fog", "Foggy Night")
@@ -100,6 +104,8 @@ class LightingTest(unittest.TestCase):
         m.begin("night")
         m.commit(undo_fn=lt.apply(dict(PRESETS["night"]), preset=True))
         self.assertEqual(lt.lighting()["visibility"], before, "a preset never raises the visibility")
+        self.assertGreater(lt.lighting()["fog_density"], PRESETS["night"]["fog_density"],
+                           "a preset never thins out a fog scenario")
         rs = next(p for p in m.sc.all_pids() if m.sc.type_name(p) == "RenderSettings")
         self.assertTrue(m.sc.read(rs)["m_Fog"])
         self.assertEqual(lt.preset(), "night")
