@@ -34,6 +34,7 @@ from briefing_sync import sync_mission
 from scenario_backup import EXCHANGE_SUFFIX, ScenarioBackups
 from navmesh_edit import NavMesh, decode_tile
 from lighting import PRESET_NAMES, PRESETS, Lighting, source_scene
+import event_types as et
 from terrain_edit import TerrainPaint
 from terrain_features import (AI_MAX_SLOPE, FEATURES_FILE, KIND_NAMES, KINDS, TerrainFeatures, clean_brush,
                               default_brushes, find_layer, layer_label, length, line_distance)
@@ -175,38 +176,7 @@ SPAWN_FIELDS = [
     ("Reload speed index", "Reload_Speed_Multiplier_Index", "int"),
     ("Bullet speed index", "Bullet_Speed_Multiplier_Index", "int"),
 ]
-EVENT_FIELDS = [
-    ("Trigger", "Trigger_Type", TRIGGER_TYPES),
-    ("Trigger time (s)", "Trigger_Time", "float"),
-    ("Trigger tanks needed", "Operator_Type", OPERATORS),
-    ("All triggers needed", "All_Trigger_Flag", "bool"),
-    ("Necessary count", "Necessary_Num", "int"),
-    ("Message", "Event_Message", "text"),
-    ("Message (JPN)", "Event_Message_JPN", "text"),
-    ("Message time (s)", "Event_Message_Time", "float"),
-]
 AREA_FIELDS = [("Tanks that count", "Trigger_Setting_Type", TRIGGER_SETTINGS)]
-EVENT_TYPE_FIELDS = {
-    4: [("Artillery shells", "Artillery_Num", "int")],
-    7: [("New visibility (m)", "Visibility", "float"),
-        ("New fog density", "Fog_Density", "float"),
-        ("Change duration (s)", "Change_Lighting_Duration", "float")],
-    2: [("New: mission target", "New_Is_Mission_Target", "bool"),
-        ("New: respawn times", "New_Respawn_Times", "int"),
-        ("New: no attack", "New_No_Attack", "bool"),
-        ("New: breakthrough", "New_Breakthrough", "bool"),
-        ("New: follow closest enemy", "New_Follow_Closest_Enemy", "bool"),
-        ("New: follow player's enemy", "New_Follow_Player_Closest_Enemy", "bool"),
-        ("New: follow distance", "New_Follow_Distance", "float"),
-        ("New: patrol type", "New_Patrol_Type", "int"),
-        ("New: attack distance", "New_Attack_Distance", "float"),
-        ("New: approach distance", "New_Approach_Distance", "float"),
-        ("New: open fire distance", "New_OpenFire_Distance", "float"),
-        ("New: lost count", "New_Lost_Count", "float"),
-        ("New: dead angle", "New_Dead_Angle", "float"),
-        ("New: patrol speed rate", "New_Patrol_Speed_Rate", "float"),
-        ("New: combat speed rate", "New_Combat_Speed_Rate", "float")],
-}
 FOG_KEYS = ("m_Fog", "m_FogDensity", "m_FogColor", "Current_Visibility", "Dust_Particle_Multiplier")
 LIGHTING_FIELDS = [("Sun / moon colour", "sun_colour", "colour"), ("Sun / moon intensity", "sun_intensity", "float"),
                    ("Ambient light", "ambient", "colour"), ("Sky brightness", "sky_brightness", "float"),
@@ -220,6 +190,21 @@ MISSION_FIELDS = [
     ("MonoBehaviour", "Game_Controller_CS", "Recon plane available", "Available_Recon_Plane", "bool"),
     ("MonoBehaviour", "Score_Manager_CS", "Assist score", "Enable_Assist_Score", "bool"),
 ]
+
+
+def summary(names, empty="none", limit=6):
+    """A list of names for the Properties panel; a long one is shortened."""
+    if not names:
+        return empty
+    if len(names) <= limit:
+        return ", ".join(names)
+    return ", ".join(names[:limit - 1]) + f" and {len(names) - limit + 1} more"
+
+
+def _number(text):
+    """A number typed in a field; 'inf' is allowed (for example an approach
+    distance that holds the tank in place)."""
+    return float(str(text).strip().replace(",", "."))
 
 
 def _rgb_of(colour):
@@ -2898,6 +2883,8 @@ class EditorApp:
         if key == "trigger":
             return enum(TRIGGER_TYPES), d["Trigger_Type"], field("Trigger_Type", int)
         if key == "time":
+            if kind != "spawns" and d["Trigger_Type"] != 0:
+                return None
             return None, f"{d['Trigger_Time']:g}", field("Trigger_Time", float)
         if kind == "spawns":
             p, r, _ = m.world(trp)
@@ -2926,7 +2913,9 @@ class EditorApp:
             if key == "tanks":
                 return lambda: self.choose_tanks(ev, "Trigger_Tanks", "Trigger_Num", "Trigger tanks"), None, None
             if key == "message":
-                return None, d["Event_Message"], field("Event_Message")
+                if not et.shows_message(d["Event_Type"]):
+                    return None
+                return None, d["Event_Message"], lambda v: self.set_message(ev, v)
         return None
 
     def object_cell_spec(self, kind, go, key):
@@ -4647,7 +4636,7 @@ class EditorApp:
         owner = {e: m.event_go[e] for e in m.events}
         names = [m.name(owner[r["m_PathID"]]) for r in m.sc.read(ev).get(key) or []
                  if r["m_FileID"] == 0 and r["m_PathID"] in owner]
-        self.prop_info(title, ", ".join(names) if names else "(none)")
+        self.prop_info(title, summary(names, "none"))
         r = self._next()
         ttk.Button(self.props, text=f"Choose {title.lower()}...",
                    command=lambda: self.choose_events(ev, key, count_key, title)).grid(row=r, column=1, sticky="w",
@@ -4684,7 +4673,7 @@ class EditorApp:
         owner = {pid: g for g, pid in m.areas.items()}
         names = [m.name(owner[r["m_PathID"]]) for r in m.sc.read(ev).get("Trigger_Collider_Scripts") or []
                  if r["m_FileID"] == 0 and r["m_PathID"] in owner]
-        self.prop_info("Trigger areas", ", ".join(names) if names else "(none)")
+        self.prop_info("Trigger areas", summary(names, "none"))
         r = self._next()
         ttk.Button(self.props, text="Choose trigger areas...", command=lambda: self.choose_areas(ev)).grid(
             row=r, column=1, sticky="w", pady=(0, 4))
@@ -4728,6 +4717,169 @@ class EditorApp:
         users = self.referenced_by(go)
         self.prop_info("Used by", ", ".join(users) if users else "(no event)")
 
+    def event_props(self, ev):
+        """Properties of an event, built from the description of its type and
+        trigger (event_types.py): only fields that do something in the game,
+        in the sections Event, What it does, When, Message and Links."""
+        m = self.model
+        d = m.sc.read(ev)
+        t, trig = d["Event_Type"], d["Trigger_Type"]
+        types = sorted(et.EVENT_NAMES)
+        names = [et.EVENT_NAMES[k] for k in types]
+        if t not in types:
+            types.append(t)
+            names.append(f"Type {t}")
+        self.prop_combo("Event type", names, types.index(t),
+                        lambda i: self.op("Set event type", m.set_field, ev, "Event_Type", types[i]))
+        self.prop_enabled(ev)
+
+        self.prop_heading("What it does", et.EVENT_HELP.get(t))
+        if t in et.TARGET_TYPES:
+            self.prop_tanklist("Affected tanks", ev, "Target_Tanks", "Target_Num")
+        if t == 2:
+            self.ai_rows(ev)
+        if t == 13:
+            self.prop_eventlist("Events to enable", ev, "Disabled_Events", "Disabled_Event_Num")
+        if t == 4:
+            self.prop_info("Battery", self.ref_name(d.get("Artillery_Script")))
+            self.prop_info("Target", self.ref_name(d.get("Artillery_Target")))
+        if t == 12:
+            self.prop_info("Object", self.ref_name(d.get("Activation_Object")))
+        self.schema_rows(ev, et.TYPE_FIELDS.get(t, []))
+
+        self.prop_heading("When", et.TRIGGER_HELP.get(trig))
+        trigs = sorted(et.TRIGGER_NAMES)
+        if trig not in trigs:
+            trigs.append(trig)
+        self.prop_combo("Trigger", [et.TRIGGER_NAMES.get(k, f"Type {k}") for k in trigs], trigs.index(trig),
+                        lambda i: self.op("Set trigger", m.set_field, ev, "Trigger_Type", trigs[i]))
+        if trig == 0:
+            self.prop_entry("After (s)", f"{d['Trigger_Time']:g}",
+                            lambda s: self.op("Set trigger time", m.set_field, ev, "Trigger_Time", _number(s)),
+                            tip="Seconds after the event is enabled")
+        if trig == 2:
+            self.prop_arealist(ev)
+            keys = sorted(et.AREA_TANKS)
+            cur = d.get("Trigger_Setting_Type", 0)
+            self.prop_combo("Tanks that count", [et.AREA_TANKS[k] for k in keys], keys.index(cur) if cur in keys
+                            else -1, lambda i: self.op("Set tanks that count", m.set_field, ev,
+                                                       "Trigger_Setting_Type", keys[i]),
+                            tip="Hostile and friendly are seen from the player")
+        if et.uses_tank_list(d):
+            self.prop_tanklist("Trigger tanks", ev, "Trigger_Tanks", "Trigger_Num")
+            modes = ["all", "any", "count"] if trig == 1 else ["all", "any"]
+            mode, number = et.tanks_needed(d)
+            self.prop_combo("Tanks needed", [et.NEEDED[k] for k in modes], modes.index(mode) if mode in modes
+                            else 0, lambda i: self.set_tanks_needed(ev, modes[i]))
+            if mode == "count" and trig == 1:
+                self.prop_entry("Number needed", str(number), lambda s: self.set_tanks_needed(ev, "count", int(s)))
+
+        if et.shows_message(t):
+            self.prop_heading("Message")
+            text = d.get("Event_Message", "")
+            self.prop_entry("Text", text, lambda s: self.set_message(ev, s),
+                            tip="The Japanese text is set to the same text")
+            n = len(text)
+            over = n > et.MESSAGE_LIMIT
+            self.prop_info("Length", f"{n} of {et.MESSAGE_LIMIT} characters" + (": may be cut off" if over else ""),
+                           fg=WARN_FG if over else "#404040")
+            self.schema_rows(ev, et.MESSAGE_FIELDS)
+
+        self.prop_heading("Links")
+        self.prop_eventlist("Events to cancel", ev, "Useless_Events", "Useless_Event_Num")
+        enabled_by, cancelled_by = self.event_links(ev)
+        self.prop_info("Enabled by", summary(enabled_by, "none"))
+        self.prop_info("Cancelled by", summary(cancelled_by, "none"))
+
+    def ai_rows(self, ev):
+        """New AI settings of a 'Change AI settings' event: all are applied."""
+        m = self.model
+        d = m.sc.read(ev)
+        targets = [r["m_PathID"] for r in d.get("Target_Tanks") or [] if r["m_FileID"] == 0]
+        first = next((m.event_of_go(m.go_of_tr[p]) for p in targets if p in m.go_of_tr), None)
+        if first is not None:
+            r = self._next()
+            ttk.Button(self.props, text=f"Take values from {m.name(m.event_go[first])}",
+                       command=lambda: self.op("Take AI values", self.take_ai_values, ev, first)).grid(
+                row=r, column=1, sticky="w", pady=(0, 4))
+        packs = [0] + m.packs
+        pnames = ["(none)"] + [m.name(m.go_of_tr[p]) for p in m.packs]
+        cur = m.pack_tr(d["New_WayPoint_Pack"]["m_PathID"]) if d["New_WayPoint_Pack"]["m_PathID"] else 0
+        self.prop_combo("Route", pnames, packs.index(cur) if cur in packs else 0,
+                        lambda i: self.op("Set new route", m.set_field, ev, "New_WayPoint_Pack",
+                                          {"m_FileID": 0, "m_PathID": m.go_of_tr[packs[i]] if packs[i] else 0}))
+        self.prop_ref_combo("Follow target", [ev], "New_Follow_Target")
+        self.schema_rows(ev, et.AI_FIELDS)
+
+    def take_ai_values(self, ev, spawn):
+        """Fill the New_ values of a Change AI event from a tank's settings."""
+        m = self.model
+        s = m.sc.read(spawn)
+        d = m.edit(ev)
+        for key, *_ in et.AI_FIELDS:
+            src = et.ai_source_key(key)
+            if key in d and src in s:
+                d[key] = s[src]
+        m._set(ev, d)
+
+    def schema_rows(self, pid, fields):
+        """Rows for event_types field descriptions."""
+        m = self.model
+        d = m.sc.read(pid)
+        for field in fields:
+            key, _, kind, _, tip = field
+            if key not in d:
+                continue
+            title, val = et.label(field), d[key]
+            if kind == "bool":
+                self.prop_check(title, val, lambda v, k=key: self.op(f"Set {k}", m.set_field, pid, k, bool(v)),
+                                tip=tip or None)
+            elif kind == "int":
+                self.prop_entry(title, val, lambda s, k=key: self.op(f"Set {k}", m.set_field, pid, k, int(s)),
+                                tip=tip or None)
+            elif kind == "float":
+                self.prop_entry(title, f"{val:.4g}", lambda s, k=key: self.op(f"Set {k}", m.set_field, pid, k,
+                                                                             _number(s)), tip=tip or None)
+            else:
+                self.prop_entry(title, val, lambda s, k=key: self.op(f"Set {k}", m.set_field, pid, k, s),
+                                tip=tip or None)
+
+    def set_tanks_needed(self, ev, mode, number=None):
+        m = self.model
+        if number is None:
+            number = max(1, et.tanks_needed(m.sc.read(ev))[1] or 1)
+        fields = et.needed_fields(mode, number)
+        self.op("Set tanks needed", lambda: [m.set_field(ev, k, v) for k, v in fields.items()])
+
+    def set_message(self, ev, text):
+        m = self.model
+        self.op("Set message", lambda: [m.set_field(ev, k, text) for k in ("Event_Message", "Event_Message_JPN")])
+
+    def event_links(self, ev):
+        """(names of events that enable ev, names of events that cancel ev)."""
+        m = self.model
+        enabled, cancelled = [], []
+        for e in m.events:
+            if e == ev or not m.active(m.event_go[e]):
+                continue
+            d = m.sc.read(e)
+            if any(r["m_FileID"] == 0 and r["m_PathID"] == ev for r in d.get("Disabled_Events") or []):
+                enabled.append(m.name(m.event_go[e]))
+            if any(r["m_FileID"] == 0 and r["m_PathID"] == ev for r in d.get("Useless_Events") or []):
+                cancelled.append(m.name(m.event_go[e]))
+        return enabled, cancelled
+
+    def ref_name(self, ref):
+        """Name of the object a reference points to, or 'none'."""
+        m = self.model
+        if not ref or ref.get("m_FileID") or not ref.get("m_PathID"):
+            return "none"
+        pid = ref["m_PathID"]
+        go = pid if pid in m.go else m.go_of_tr.get(pid)
+        if go is None and pid in m.sc.all_pids():
+            go = m.sc.read(pid, head_only=True).get("m_GameObject", {}).get("m_PathID")
+        return m.name(go) if go in m.go else f"object {pid}"
+
     def prop_enabled(self, ev):
         """'Enabled at start' of an event; a disabled event waits for an Enable
         events event."""
@@ -4735,7 +4887,8 @@ class EditorApp:
         d = m.sc.read(ev)
         if "m_Enabled" in d:
             self.prop_check("Enabled at start", bool(d["m_Enabled"]),
-                            lambda v: self.op("Set enabled at start", m.set_field, ev, "m_Enabled", 1 if v else 0))
+                            lambda v: self.op("Set enabled at start", m.set_field, ev, "m_Enabled", 1 if v else 0),
+                            tip="Off: the event waits until an 'Enable events' event starts it")
 
     def choose_tanks(self, ev, key, count_key, title):
         m = self.model
@@ -5745,32 +5898,7 @@ class EditorApp:
                 self.field_rows(ev, AREA_FIELDS)
                 self.prop_arealist(ev)
         elif kind == "event":
-            ev = m.event_of_go(go)
-            d = m.sc.read(ev)
-            self.prop_info("Event type", label(EVENT_TYPES, d["Event_Type"]))
-            self.prop_enabled(ev)
-            self.field_rows(ev, EVENT_FIELDS)
-            self.prop_tanklist("Trigger tanks", ev, "Trigger_Tanks", "Trigger_Num")
-            if d["Trigger_Type"] == 2:
-                self.field_rows(ev, AREA_FIELDS)
-                self.prop_arealist(ev)
-            if d["Event_Type"] in (2, 3, 6):
-                self.prop_tanklist("Affected tanks", ev, "Target_Tanks", "Target_Num")
-            if d["Event_Type"] == 13:
-                self.prop_eventlist("Events to enable", ev, "Disabled_Events", "Disabled_Event_Num")
-            self.prop_eventlist("Events to cancel", ev, "Useless_Events", "Useless_Event_Num")
-            extra = EVENT_TYPE_FIELDS.get(d["Event_Type"])
-            if extra:
-                self.prop_sep()
-                if d["Event_Type"] == 2:
-                    self.prop_ref_combo("New: follow target", [ev], "New_Follow_Target")
-                    packs = [0] + m.packs
-                    pnames = ["(no change)"] + [m.name(m.go_of_tr[p]) for p in m.packs]
-                    cur = m.pack_tr(d["New_WayPoint_Pack"]["m_PathID"]) if d["New_WayPoint_Pack"]["m_PathID"] else 0
-                    self.prop_combo("New: waypoint pack", pnames, packs.index(cur) if cur in packs else 0,
-                                    lambda i: self.op("Set new waypoint pack", m.set_field, ev, "New_WayPoint_Pack",
-                                                      {"m_FileID": 0, "m_PathID": m.go_of_tr[packs[i]] if packs[i] else 0}))
-                self.field_rows(ev, extra)
+            self.event_props(m.event_of_go(go))
         else:
             if kind == "waypoint":
                 pack = m.waypoints[m.tr_of_go[go]]
@@ -5962,7 +6090,7 @@ class EditorApp:
             opts.append((f"{m.name(go)}  [{side}]", m.tr_of_go[go]))
         return opts
 
-    def prop_ref_combo(self, title, evs, key, exclude=None):
+    def prop_ref_combo(self, title, evs, key, exclude=None, tip=None):
         m = self.model
         opts = self.spawn_ref_options(exclude)
         cur = {m.sc.read(e)[key]["m_PathID"] for e in evs}
@@ -5972,7 +6100,7 @@ class EditorApp:
         def commit(i):
             ref = {"m_FileID": 0, "m_PathID": opts[i][1]}
             self.op(f"Set {key}", lambda: [m.set_field(e, key, dict(ref)) for e in evs])
-        self.prop_combo(title, [o[0] for o in opts], idx, commit)
+        self.prop_combo(title, [o[0] for o in opts], idx, commit, tip=tip)
 
     def tank_names(self, refs):
         m = self.model
@@ -5981,7 +6109,7 @@ class EditorApp:
             go = m.go_of_tr.get(r["m_PathID"], r["m_PathID"]) if r["m_FileID"] == 0 else None
             if go in m.go:
                 names.append(m.name(go))
-        return ", ".join(names) if names else "none"
+        return summary(names, "none")
 
     def multi_props(self, sel):
         m = self.model
@@ -6049,15 +6177,29 @@ class EditorApp:
         tk.Frame(self.props, height=1, bg="#D9D9D9").grid(
             row=self._next(), column=0, columnspan=2, sticky="ew", pady=6)
 
-    def prop_info(self, name, text):
+    def prop_info(self, name, text, tip=None, fg="#404040"):
         r = self._next()
-        tk.Label(self.props, text=name, anchor="w").grid(row=r, column=0, sticky="nw", padx=(0, 6), pady=1)
-        tk.Label(self.props, text=text, anchor="w", justify="left", wraplength=170, fg="#404040").grid(
+        lbl = tk.Label(self.props, text=name, anchor="w")
+        lbl.grid(row=r, column=0, sticky="nw", padx=(0, 6), pady=1)
+        tk.Label(self.props, text=text, anchor="w", justify="left", wraplength=170, fg=fg).grid(
             row=r, column=1, sticky="w", pady=1)
+        if tip:
+            ToolTip(lbl, tip)
 
-    def prop_entry(self, name, value, commit):
+    def prop_heading(self, text, note=None):
+        """A section heading, with an optional explanation below it."""
+        tk.Label(self.props, text=text, font=UI_BOLD, anchor="w").grid(
+            row=self._next(), column=0, columnspan=2, sticky="w", pady=(8, 0))
+        if note:
+            tk.Label(self.props, text=note, anchor="w", justify="left", wraplength=300, fg="#505050").grid(
+                row=self._next(), column=0, columnspan=2, sticky="w", pady=(0, 2))
+
+    def prop_entry(self, name, value, commit, tip=None):
         r = self._next()
-        tk.Label(self.props, text=name, anchor="w").grid(row=r, column=0, sticky="w", padx=(0, 6), pady=1)
+        lbl = tk.Label(self.props, text=name, anchor="w")
+        lbl.grid(row=r, column=0, sticky="w", padx=(0, 6), pady=1)
+        if tip:
+            ToolTip(lbl, tip)
         var = tk.StringVar(value=str(value))
         ent = ttk.Entry(self.props, textvariable=var, width=22)
         ent.grid(row=r, column=1, sticky="ew", pady=1)
@@ -6080,16 +6222,22 @@ class EditorApp:
         self.props.columnconfigure(1, weight=1)
         return ent
 
-    def prop_check(self, name, value, commit):
+    def prop_check(self, name, value, commit, tip=None):
         r = self._next()
-        tk.Label(self.props, text=name, anchor="w").grid(row=r, column=0, sticky="w", padx=(0, 6), pady=1)
+        lbl = tk.Label(self.props, text=name, anchor="w")
+        lbl.grid(row=r, column=0, sticky="w", padx=(0, 6), pady=1)
+        if tip:
+            ToolTip(lbl, tip)
         var = tk.BooleanVar(value=bool(value))
         ttk.Checkbutton(self.props, variable=var, command=lambda: commit(var.get())).grid(
             row=r, column=1, sticky="w")
 
-    def prop_combo(self, name, values, current, commit):
+    def prop_combo(self, name, values, current, commit, tip=None):
         r = self._next()
-        tk.Label(self.props, text=name, anchor="w").grid(row=r, column=0, sticky="w", padx=(0, 6), pady=1)
+        lbl = tk.Label(self.props, text=name, anchor="w")
+        lbl.grid(row=r, column=0, sticky="w", padx=(0, 6), pady=1)
+        if tip:
+            ToolTip(lbl, tip)
         cb = ttk.Combobox(self.props, state="readonly", values=values, width=22)
         if 0 <= current < len(values):
             cb.current(current)

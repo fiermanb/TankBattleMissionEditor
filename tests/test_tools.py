@@ -208,6 +208,43 @@ class ToolTest(unittest.TestCase):
         self.assertAlmostEqual(m.ground(x, z), g0, places=3, msg="undo restores the ground")
         app.set_tool("select")
 
+    def prop_texts(self):
+        self.root.update()
+        return [w.cget("text") for w in self.app.props.winfo_children() if isinstance(w, tk.Label)]
+
+    def test_event_panel_follows_type_and_trigger(self):
+        app, m = self.app, self.app.model
+        ev = next(e for e in m.events if e not in m.spawns and m.active(m.event_go[e]))
+        depth = len(m.undo_stack)
+        app.select(m.event_go[ev])
+        app.op("type", m.set_field, ev, "Event_Type", 1)
+        app.op("timer", m.set_field, ev, "Trigger_Type", 0)
+        app.refresh_props()
+        texts = self.prop_texts()
+        for heading in ("What it does", "When", "Message", "Links"):
+            self.assertIn(heading, texts)
+        self.assertIn("After (s)", texts)
+        self.assertNotIn("Tanks needed", texts)
+        app.set_message(ev, "Short text")
+        self.assertEqual(m.sc.read(ev)["Event_Message_JPN"], "Short text", "the Japanese text follows")
+        app.op("destroyed", m.set_field, ev, "Trigger_Type", 1)
+        app.set_tanks_needed(ev, "count", 2)
+        d = m.sc.read(ev)
+        self.assertEqual((d["Operator_Type"], d["All_Trigger_Flag"], d["Necessary_Num"]), (0, False, 2))
+        app.refresh_props()
+        texts = self.prop_texts()
+        self.assertNotIn("After (s)", texts, "the trigger time works for timers only")
+        self.assertIn("Tanks needed", texts)
+        self.assertIn("Number needed", texts)
+        app.op("enable", m.set_field, ev, "Event_Type", 13)
+        app.refresh_props()
+        texts = self.prop_texts()
+        self.assertNotIn("Message", texts, "only message events show a message")
+        self.assertIn("Events to enable", texts)
+        while len(m.undo_stack) > depth:
+            app.undo()
+        app.select(None)
+
     def test_clear_selection(self):
         app, m = self.app, self.app.model
         go = m.event_go[m.spawns[0]]
