@@ -263,6 +263,43 @@ class ToolTest(unittest.TestCase):
                 and any(isinstance(c, tk.Button) for c in w.winfo_children())]
         self.assertTrue(rows, "the fog colour is a colour button")
 
+    def test_pick_tanks_on_the_map(self):
+        app, m = self.app, self.app.model
+        app.view.w, app.view.h = 400, 300
+        ev = next(e for e in m.events if e not in m.spawns and m.active(m.event_go[e]))
+        tank = next(e for e in m.spawns if m.active(m.event_go[e]))
+        depth = len(m.undo_stack)
+        app.select(m.event_go[ev])
+        app.op("trigger", m.set_field, ev, "Trigger_Type", 1)
+        app.op("no tanks", m.set_field, ev, "Trigger_Tanks", [])
+        app.refresh_props()
+        texts = self.prop_texts()
+        self.assertIn("Also cancels", texts, "cancelling is part of what the event does")
+        self.assertNotIn("Events to cancel", texts)
+        app.start_pick(ev, "tanks", "Trigger_Tanks", "Trigger_Num", "Trigger tanks")
+        self.assertEqual(self.state(), ("pick", "target"))
+        trp = m.tr_of_go[m.event_go[tank]]
+        q = m.world(trp)[0]
+        app.view.cx, app.view.cz = q[0], q[2]
+        sx, sy = app.view.w2s(q[0], q[2])
+        app.on_press(Click(sx, sy, time=1000))
+        self.assertEqual([r["m_PathID"] for r in m.sc.read(ev)["Trigger_Tanks"]], [trp])
+        self.assertEqual(app.selected, m.event_go[ev], "the event stays selected")
+        self.assertEqual(app.event_link_targets()[0], {trp}, "the tank is highlighted")
+        app.op("area trigger, any hostile tank", lambda: [m.set_field(ev, "Trigger_Type", 2),
+                                                          m.set_field(ev, "Trigger_Setting_Type", 1)])
+        self.assertEqual(app.event_link_targets()[0], set(), "an ignored tank list is not highlighted")
+        app.undo()
+        app.on_press(Click(sx, sy, time=3000))
+        self.assertEqual(m.sc.read(ev)["Trigger_Tanks"], [], "a second click removes it")
+        app.on_key(Key("Escape"))
+        self.assertEqual(self.state()[0], "select")
+        while len(m.undo_stack) > depth:
+            app.undo()
+        app.select(None)
+        self.assertTrue(editor.point_in_polygon((1, 1), [(0, 0), (2, 0), (2, 2), (0, 2)]))
+        self.assertFalse(editor.point_in_polygon((3, 1), [(0, 0), (2, 0), (2, 2), (0, 2)]))
+
     def test_clear_selection(self):
         app, m = self.app, self.app.model
         go = m.event_go[m.spawns[0]]

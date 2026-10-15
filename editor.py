@@ -120,7 +120,8 @@ EVENT_MARK = 18
 
 TOOLS = ("select", "pan", "zoomin", "zoomout", "rotate")
 TOOL_CURSORS = {"select": "arrow", "pan": "hand2", "zoomin": "crosshair", "zoomout": "crosshair",
-                "rotate": "exchange", "feature": "pencil", "vertex": "tcross", "add": "plus"}
+                "rotate": "exchange", "feature": "pencil", "vertex": "tcross", "add": "plus", "pick": "target"}
+LINK_COLOUR = "#FFD000"
 FEATURE_COLOURS = {"cut": "#8B4513", "raise": "#D2691E", "level": "#B8A000", "smooth": "#9050C0",
                    "paint": "#2E9E3E"}
 MESSAGE_COLOURS = {None: ("#DCEAF8", "#7FA7D6"), "ok": ("#DFF0D8", "#79B26B"),
@@ -129,7 +130,8 @@ MESSAGE_MS = {None: 5000, "ok": 5000, "warn": 10000}
 ADD_BUTTONS = {("spawn", 1): "add:hostile", ("spawn", 0): "add:friendly", ("route",): "add:route",
                ("waypoint",): "add:waypoint"}
 TOOL_NAMES = {"select": "Select / move", "pan": "Pan", "zoomin": "Zoom in", "zoomout": "Zoom out",
-              "rotate": "Rotate", "feature": "Draw terrain", "vertex": "Edit terrain features", "add": "Add"}
+              "rotate": "Rotate", "feature": "Draw terrain", "vertex": "Edit terrain features", "add": "Add",
+              "pick": "Pick on map"}
 TERRAIN_TOOLS = ("feature", "vertex")
 FREEHAND_PX = 6
 BRUSH_PARAMS = (("width", "Width", "m", "Width at ground level"),
@@ -196,6 +198,17 @@ MISSION_FIELDS = [
     ("MonoBehaviour", "Game_Controller_CS", "Recon plane available", "Available_Recon_Plane", "bool"),
     ("MonoBehaviour", "Score_Manager_CS", "Assist score", "Enable_Assist_Score", "bool"),
 ]
+
+
+def point_in_polygon(p, poly):
+    """True when world point p lies inside polygon poly [(x, z), ...]."""
+    x, z = p
+    inside = False
+    pts = [tuple(q) for q in poly]
+    for (x1, z1), (x2, z2) in zip(pts, pts[1:] + pts[:1]):
+        if (z1 > z) != (z2 > z) and x < x1 + (z - z1) * (x2 - x1) / (z2 - z1):
+            inside = not inside
+    return inside
 
 
 def split_colour(rgb):
@@ -893,6 +906,7 @@ class EditorApp:
         self.clipboard = None
         self.mouse = None
         self.sketch = None
+        self.pick = None
         self.add_item = None
         self.space_down = False
         self._obj_sync = False
@@ -3239,7 +3253,7 @@ class EditorApp:
     def on_table_select(self, tv):
         if self._table_sync or not self.model:
             return
-        if self.tool in TERRAIN_TOOLS:
+        if self.tool in TERRAIN_TOOLS or self.tool == "pick":
             self.set_tool("select")
         gos = [int(i) for i in tv.selection()]
         others = [g for g in self.sel if not tv.exists(str(g))]
@@ -3384,6 +3398,8 @@ class EditorApp:
             self.finish_sketch()
         self.tool = tool
         self.add_item = item if tool == "add" else None
+        if tool != "pick":
+            self.pick = None
         tree = getattr(self, "obj_tree", None)
         if tool != "add" and tree is not None and tree.selection():
             tree.selection_remove(*tree.selection())
@@ -3421,6 +3437,8 @@ class EditorApp:
         return "add:object"
 
     def tool_title(self):
+        if self.tool == "pick" and getattr(self, "pick", None):
+            return f"Pick {self.pick['title'].lower()}"
         return f"Add {self.add_item[2]}" if self.tool == "add" else TOOL_NAMES[self.tool]
 
     def cursor(self):
@@ -3449,6 +3467,10 @@ class EditorApp:
             if kind == "template" and tuple(value) == ("waypoint",):
                 return "Waypoint: click on the map to add a waypoint after the selected one of the selected route."
             return f"Add {title}: click on the map to place one."
+        if tool == "pick" and getattr(self, "pick", None):
+            what = "an area" if self.pick["kind"] == "areas" else "a tank"
+            return (f"{self.tool_title()} for {self.model.name(self.model.event_go[self.pick['ev']])}: click "
+                    f"{what} to add or remove it.")
         if tool == "feature":
             return (f"Draw terrain with '{self.brush['name']}': click points or drag to draw; right-click, "
                     "double-click or Enter finishes (one point places a single stamp)." + self.ai_note(self.brush))
@@ -4649,20 +4671,18 @@ class EditorApp:
         m = self.model
         d = m.sc.read(ev)
         self.prop_info(title, self.tank_names(d.get(key) or []))
-        r = self._next()
-        ttk.Button(self.props, text=f"Choose {title.lower()}...",
-                   command=lambda: self.choose_tanks(ev, key, count_key, title)).grid(row=r, column=1, sticky="w",
-                                                                                     pady=(0, 4))
+        self.choose_buttons(lambda: self.choose_tanks(ev, key, count_key, title),
+                            lambda: self.start_pick(ev, "tanks", key, count_key, title))
 
-    def prop_eventlist(self, title, ev, key, count_key):
+    def prop_eventlist(self, title, ev, key, count_key, tip=None):
         """Event list of an event (names) with a button to choose the events."""
         m = self.model
         owner = {e: m.event_go[e] for e in m.events}
         names = [m.name(owner[r["m_PathID"]]) for r in m.sc.read(ev).get(key) or []
                  if r["m_FileID"] == 0 and r["m_PathID"] in owner]
-        self.prop_info(title, summary(names, "none"))
+        self.prop_info(title, summary(names, "none"), tip=tip)
         r = self._next()
-        ttk.Button(self.props, text=f"Choose {title.lower()}...",
+        ttk.Button(self.props, text="Choose events...",
                    command=lambda: self.choose_events(ev, key, count_key, title)).grid(row=r, column=1, sticky="w",
                                                                                       pady=(0, 4))
 
@@ -4698,9 +4718,124 @@ class EditorApp:
         names = [m.name(owner[r["m_PathID"]]) for r in m.sc.read(ev).get("Trigger_Collider_Scripts") or []
                  if r["m_FileID"] == 0 and r["m_PathID"] in owner]
         self.prop_info("Trigger areas", summary(names, "none"))
+        self.choose_buttons(lambda: self.choose_areas(ev),
+                            lambda: self.start_pick(ev, "areas", "Trigger_Collider_Scripts", "Trigger_Collider_Num",
+                                                    "Trigger areas"))
+
+    def choose_buttons(self, choose, pick):
+        """'Choose...' (from a list) and 'Pick on map' under a list of tanks or
+        areas."""
         r = self._next()
-        ttk.Button(self.props, text="Choose trigger areas...", command=lambda: self.choose_areas(ev)).grid(
-            row=r, column=1, sticky="w", pady=(0, 4))
+        cell = tk.Frame(self.props, bg=FACE)
+        cell.grid(row=r, column=1, sticky="w", pady=(0, 4))
+        ttk.Button(cell, text="Choose...", command=choose).pack(side="left")
+        btn = ttk.Button(cell, text="Pick on map", command=pick)
+        btn.pack(side="left", padx=(4, 0))
+        ToolTip(btn, "Click tanks or areas on the map to add or remove them")
+
+    # ---- picking the tanks and areas of an event on the map ----------------
+
+    def start_pick(self, ev, kind, key, count_key, title):
+        """Pick on map: each click on a tank or area adds it to the event's list
+        or removes it; the event stays selected."""
+        self.set_tool("select")
+        self.pick = {"ev": ev, "kind": kind, "key": key, "count_key": count_key, "title": title}
+        self.set_tool("pick")
+
+    def pick_target(self, sx, sy):
+        """The reference (transform or area script pid) under a screen point for
+        the current pick, or None."""
+        m, v, p = self.model, self.view, self.pick
+        wx, wz = v.s2w(sx, sy)
+        if p["kind"] == "areas":
+            for g, pid in m.areas.items():
+                if not m.active(g):
+                    continue
+                shape = m.area_shape(g)
+                if shape is None:
+                    continue
+                if shape[0] == "circle":
+                    if math.hypot(wx - shape[1][0], wz - shape[1][1]) <= shape[2]:
+                        return pid
+                elif point_in_polygon((wx, wz), shape[1]):
+                    return pid
+            return None
+        own = m.event_go.get(p["ev"])
+        best = None
+        for e in m.spawns:
+            go = m.event_go[e]
+            if go == own or not self.spawn_visible(e):
+                continue
+            q = m.world(m.tr_of_go[go])[0]
+            x, y = v.w2s(q[0], q[2])
+            dist = math.hypot(x - sx, y - sy)
+            if dist <= 14 and (best is None or dist < best[0]):
+                best = (dist, m.tr_of_go[go])
+        return best[1] if best else None
+
+    def pick_click(self, e):
+        m, p = self.model, self.pick
+        ev = p["ev"]
+        if ev not in m.events:
+            self.stop_tool()
+            return
+        target = self.pick_target(e.x, e.y)
+        if target is None:
+            self.status(f"Nothing to pick here. {self.tool_instructions()}")
+            return
+        refs = [r for r in m.sc.read(ev).get(p["key"]) or [] if r["m_FileID"] == 0]
+        ids = [r["m_PathID"] for r in refs]
+        added = target not in ids
+        new = refs + [{"m_FileID": 0, "m_PathID": target}] if added else [r for r in refs if r["m_PathID"] != target]
+
+        def do():
+            d = m.edit(ev)
+            d[p["key"]] = new
+            if p["count_key"] in d:
+                d[p["count_key"]] = max(len(new), 1) if p["count_key"] == "Trigger_Num" else len(new)
+            m._set(ev, d)
+        self.op(f"{'Add to' if added else 'Remove from'} {p['title'].lower()}", do)
+        self.status(f"{p['title']}: {len(new)} chosen. {self.tool_instructions()}")
+
+    def event_link_targets(self):
+        """(tank transform pids, area GameObjects) the selected event refers to."""
+        m = self.model
+        go = self.selected if self.selected in m.go else None
+        ev = m.event_of_go(go) if go is not None else None
+        if ev is None:
+            return set(), set()
+        d = m.sc.read(ev)
+        keys = ["Trigger_Tanks"] if et.uses_tank_list(d) else []
+        if d["Event_Type"] in et.TARGET_TYPES:
+            keys.append("Target_Tanks")
+        tanks = {r["m_PathID"] for k in keys for r in d.get(k) or [] if r["m_FileID"] == 0}
+        owner = {pid: g for g, pid in m.areas.items()}
+        areas = {owner[r["m_PathID"]] for r in d.get("Trigger_Collider_Scripts") or []
+                 if r["m_FileID"] == 0 and r["m_PathID"] in owner}
+        return tanks, areas
+
+    def draw_event_links(self):
+        """Highlight the tanks and areas of the selected event on the map."""
+        m, v, c = self.model, self.view, self.canvas
+        tanks, areas = self.event_link_targets()
+        for trp in tanks:
+            if trp not in m.tr:
+                continue
+            q = m.world(trp)[0]
+            x, y = v.w2s(q[0], q[2])
+            c.create_oval(x - 15, y - 15, x + 15, y + 15, outline="#000000", width=4, tags="overlay")
+            c.create_oval(x - 15, y - 15, x + 15, y + 15, outline=LINK_COLOUR, width=2, tags="overlay")
+        for g in areas:
+            shape = m.area_shape(g)
+            if shape is None:
+                continue
+            if shape[0] == "box":
+                pts = [q for x, z in shape[1] for q in v.w2s(x, z)]
+                c.create_polygon(*pts, fill="", outline=LINK_COLOUR, width=3, tags="overlay")
+            else:
+                x, y = v.w2s(*shape[1])
+                rr = shape[2] * v.scale
+                c.create_oval(x - rr, y - rr, x + rr, y + rr, outline=LINK_COLOUR, width=3, tags="overlay")
 
     def choose_areas(self, ev):
         m = self.model
@@ -4770,6 +4905,9 @@ class EditorApp:
         if t == 12:
             self.prop_info("Object", self.ref_name(d.get("Activation_Object")))
         self.schema_rows(ev, et.TYPE_FIELDS.get(t, []))
+        self.prop_eventlist("Also cancels", ev, "Useless_Events", "Useless_Event_Num",
+                            tip="Events that will no longer fire once this event has fired (for example, "
+                                "'Mission complete' cancels 'Mission failed')")
 
         self.prop_heading("When", et.TRIGGER_HELP.get(trig))
         trigs = sorted(et.TRIGGER_NAMES)
@@ -4809,8 +4947,7 @@ class EditorApp:
                            fg=WARN_FG if over else "#404040")
             self.schema_rows(ev, et.MESSAGE_FIELDS)
 
-        self.prop_heading("Links")
-        self.prop_eventlist("Events to cancel", ev, "Useless_Events", "Useless_Event_Num")
+        self.prop_heading("Links", "Events that refer to this one.")
         enabled_by, cancelled_by = self.event_links(ev)
         self.prop_info("Enabled by", summary(enabled_by, "none"))
         self.prop_info("Cancelled by", summary(cancelled_by, "none"))
@@ -5203,6 +5340,9 @@ class EditorApp:
         if self.tool == "add":
             self.add_click(e)
             return
+        if self.tool == "pick":
+            self.pick_click(e)
+            return
         if self.tool == "feature":
             self.start_terrain_sketch(e)
         elif self.tool == "vertex":
@@ -5388,6 +5528,14 @@ class EditorApp:
             return
         if self.tool == "vertex":
             self.feature_menu(e)
+            return
+        if self.tool == "pick":
+            menu = tk.Menu(self.root, tearoff=0)
+            menu.add_command(label=f"Stop {self.tool_title()}", command=self.stop_tool, accelerator="Esc")
+            try:
+                menu.tk_popup(e.x_root, e.y_root)
+            finally:
+                menu.grab_release()
             return
         stop = self.tool_title() if self.tool != "select" else None
         target = self.hit(e.x, e.y, exact=bool(e.state & ALT_MASK))
@@ -5845,6 +5993,7 @@ class EditorApp:
                 c.create_line(x, y, x + math.sin(hd) * 40, y - math.cos(hd) * 40, fill="#00FFFF",
                               width=2, arrow="last", tags="overlay")
 
+        self.draw_event_links()
         bar_m = 10 ** math.floor(math.log10(max(1e-3, 150 / v.scale)))
         bar_px = bar_m * v.scale
         x0, x1, y = v.w - 30 - bar_px, v.w - 30, v.h - 14
