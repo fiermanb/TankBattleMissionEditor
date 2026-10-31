@@ -58,6 +58,7 @@ REF_LISTS = {
 REF_SINGLES = (
     "Respawn_Target", "Follow_Target", "Commander", "New_Respawn_Target",
     "New_Follow_Target", "Artillery_Target", "Activation_Object", "Trigger_Script",
+    "Patrol_Target", "New_Patrol_Target",
 )
 PACK_FIELDS = ("WayPoint_Pack", "New_WayPoint_Pack", "Respawn_Point_Pack", "New_Respawn_Point_Pack")
 # the on-screen text object an event writes its message to (Event_Text); the

@@ -155,6 +155,7 @@ SPAWN_FIELDS = [
     ("Remove after death", "Remove_After_Death", "bool"),
     ("Patrol type", "Patrol_Type", "int"),
     ("No attack", "No_Attack", "bool"),
+    ("Hear player gunfire", "Hear_Player_Gunfire", "bool"),
     ("Breakthrough", "Breakthrough", "bool"),
     ("Follow closest enemy", "Follow_Closest_Enemy", "bool"),
     ("Follow player's enemy", "Follow_Player_Closest_Enemy", "bool"),
@@ -4970,6 +4971,7 @@ class EditorApp:
                         lambda i: self.op("Set new route", m.set_field, ev, "New_WayPoint_Pack",
                                           {"m_FileID": 0, "m_PathID": m.go_of_tr[packs[i]] if packs[i] else 0}))
         self.prop_ref_combo("Follow target", [ev], "New_Follow_Target")
+        self.prop_ref_combo("Patrol target", [ev], "New_Patrol_Target")
         self.schema_rows(ev, et.AI_FIELDS)
 
     def take_ai_values(self, ev, spawn):
@@ -6060,6 +6062,7 @@ class EditorApp:
             if refs:
                 self.prop_info("Referenced by", ", ".join(refs))
             self.prop_ref_combo("Follow target", [ev], "Follow_Target", exclude=go)
+            self.prop_ref_combo("Patrol target", [ev], "Patrol_Target", exclude=go)
             self.prop_ref_combo("Commander", [ev], "Commander", exclude=go)
             self.prop_sep()
             self.prop_enabled(ev)
@@ -6254,6 +6257,8 @@ class EditorApp:
 
     def prop_ref_combo(self, title, evs, key, exclude=None, tip=None):
         m = self.model
+        if any(key not in m.sc.read(e) for e in evs):
+            return
         opts = self.spawn_ref_options(exclude)
         cur = {m.sc.read(e)[key]["m_PathID"] for e in evs}
         values = [o[1] for o in opts]
@@ -6311,6 +6316,7 @@ class EditorApp:
                         next(iter(curp)) in packs else -1,
                         lambda i: self.op("Set waypoint pack", lambda: [m.assign_pack(e, packs[i]) for e in evs]))
         self.prop_ref_combo("Follow target", evs, "Follow_Target", exclude=set(sel))
+        self.prop_ref_combo("Patrol target", evs, "Patrol_Target", exclude=set(sel))
         dist = {m.sc.read(e)["Follow_Distance"] for e in evs}
         self.prop_entry("Follow distance", f"{next(iter(dist)):g}" if len(dist) == 1 else "",
                         lambda s: self.op("Set follow distance",

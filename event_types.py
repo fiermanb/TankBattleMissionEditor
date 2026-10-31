@@ -60,6 +60,7 @@ TYPE_FIELDS = {
 AI_FIELDS = [
     ("New_Breakthrough", "Breakthrough", "bool", "", "Drive the route without stopping to fight"),
     ("New_No_Attack", "No attack", "bool", "", "Do not attack (the tank may still return fire)"),
+    ("New_Hear_Player_Gunfire", "Hear player gunfire", "bool", "", "Drive towards the player's gunfire"),
     ("New_Patrol_Type", "Patrol type", "int", "", "Route behaviour (0 or 1)"),
     ("New_Patrol_Speed_Rate", "Patrol speed rate", "float", "", "Speed on the route; 1 = normal"),
     ("New_Combat_Speed_Rate", "Combat speed rate", "float", "", "Speed in combat; 1 = normal"),

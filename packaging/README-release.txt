@@ -19,7 +19,8 @@ Your backups and settings in that folder stay.
 WHAT IT DOES
 ------------
 - Move, rotate, add, copy and delete tanks, waypoints and scenery.
-- Tank settings: type, side, AI behaviour, respawns, unit group, follow target.
+- Tank settings: type, side, AI behaviour, respawns, unit group, follow target,
+  patrol target, hearing the player's gunfire.
 - Mission settings (nothing selected): lighting (day, dusk or night for
   custom scenarios), fog, visibility, recon plane.
 - Events: Properties show only the fields of the event's type and trigger.
