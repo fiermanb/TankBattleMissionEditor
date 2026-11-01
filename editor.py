@@ -22,6 +22,7 @@ import sys
 import tempfile
 import time
 import tkinter as tk
+import webbrowser
 from tkinter import colorchooser, filedialog, messagebox, ttk
 
 import numpy as np
@@ -29,7 +30,7 @@ from PIL import Image, ImageDraw, ImageTk
 
 import icons
 import settings
-from version import APP_NAME, COPYRIGHT, __version__
+from version import APP_NAME, COPYRIGHT, RELEASES_URL, __version__
 from briefing_sync import sync_mission
 from scenario_backup import EXCHANGE_SUFFIX, ScenarioBackups
 from navmesh_edit import NavMesh, decode_tile
@@ -41,7 +42,7 @@ from terrain_features import (AI_MAX_SLOPE, FEATURES_FILE, KIND_NAMES, KINDS, Te
 from terrain_features import bbox as feature_bbox
 from object_import import ObjectLibrary, base_name, category, import_object, reconnect_event_refs
 from scenarios import ScenarioManager
-from scene_io import GameContext
+from scene_io import GameContext, LayoutMismatch
 from scene_model import (
     EVENT_TYPES, OPERATORS, RELATIONSHIPS, TRIGGER_SETTINGS, TRIGGER_TYPES, SceneModel, heading_of, label, tank_display,
 )
@@ -1290,9 +1291,9 @@ class EditorApp:
             self.status(f"Recognised {len(adopted)} custom scenario(s) made by another copy of the editor: "
                         + ", ".join(adopted) + ".", "ok")
         if ctx.verify_layouts:
-            self.status("Game updated: " + ", ".join(ctx.affected_script_names()) + " changed or new; objects "
-                        "using these scripts cannot be edited until the editor is updated. Everything else "
-                        "works as before.", "warn", banner=True)
+            self.status(f"Tank Battle Classic was updated after editor {__version__} was released. Missions "
+                        "that use the changed game data cannot be opened until you install a newer editor "
+                        f"version: {RELEASES_URL}", "warn", banner=True)
         else:
             self.status(f"Game folder: {game}", "ok")
 
@@ -3610,10 +3611,31 @@ class EditorApp:
         if idx is not None and self.guard_unsaved():
             self.open_scene(idx)
 
+    def editor_update_needed(self, error):
+        """Explain that the game was updated after this editor version and
+        offer the download page."""
+        if messagebox.askyesno(
+                "Editor update needed",
+                f"Tank Battle Classic was updated on Steam after this editor version ({__version__}) was "
+                "released. This mission uses game data that the update changed, so this editor version "
+                "cannot open it.\n\n"
+                "Your game and your missions are not affected. Install the newest editor version: unzip it "
+                "over this one; your scenarios, backups and settings stay. If there is no newer version yet, "
+                "it follows soon after a game update.\n\n"
+                f"Details: {error}\n\n"
+                "Open the download page now?", icon="warning", parent=self.root):
+            webbrowser.open(RELEASES_URL)
+
     def open_scene(self, index):
         self.busy(f"Loading level{index} ({self.ctx.scene_label(index)})...")
         try:
             self.model = SceneModel(self.ctx, index)
+        except LayoutMismatch as e:
+            self.idle()
+            self.status(f"Cannot open level{index}: the game update changed data this mission uses. "
+                        f"Install a newer editor version: {RELEASES_URL}", "warn", banner=True)
+            self.editor_update_needed(e)
+            return
         except Exception as e:
             self.idle()
             self.status(f"Failed to load level{index}: {e}", "warn", banner=True)

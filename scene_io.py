@@ -385,8 +385,8 @@ class SceneFile:
         if nodes is None:
             info = self.ctx.scripts.get(p.m_PathID, ("", "", "unknown script"))
             if script_key(*info) in self.ctx.changed_scripts | self.ctx.unknown_scripts:
-                raise LayoutMismatch(f"{info[2]} changed in this game version; it can be edited after "
-                                     "the editor is updated")
+                raise LayoutMismatch(f"the game update changed {info[2]}; a newer editor version is "
+                                     "needed")
             raise ValueError(f"No layout for MonoBehaviour {pid}")
         return nodes
 
@@ -418,8 +418,8 @@ class SceneFile:
                 d = obj.read_typetree(nodes=nodes, wrap=False, check_read=True)
             except Exception as e:
                 name = nodes.m_Type if hasattr(nodes, "m_Type") else "script"
-                raise LayoutMismatch(f"{name} does not match the editor's layout for this game version "
-                                     f"({e}); update the editor") from None
+                raise LayoutMismatch(f"the game update changed {name} ({e}); a newer editor version is "
+                                     "needed") from None
         self._cache[pid] = d
         return d
 

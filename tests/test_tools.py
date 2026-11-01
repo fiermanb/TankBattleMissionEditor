@@ -369,6 +369,29 @@ class ToolTest(unittest.TestCase):
         app.hide_message()
         self.assertFalse(app.msg_bar.place_info())
 
+    def test_mission_changed_by_game_update(self):
+        """A mission whose game data a game update changed is not opened; the
+        user is told to install a newer editor version and the open mission stays."""
+        app = self.app
+        before = app.model
+        asked = []
+
+        def changed(*args, **kwargs):
+            raise editor.LayoutMismatch("the game update changed Event_Controller_CS; a newer editor version is needed")
+        old_model, old_ask = editor.SceneModel, editor.messagebox.askyesno
+        editor.SceneModel = changed
+        editor.messagebox.askyesno = lambda title, text, **kw: asked.append((title, text)) or False
+        try:
+            app.open_scene(SCENE)
+        finally:
+            editor.SceneModel, editor.messagebox.askyesno = old_model, old_ask
+        self.root.update()
+        self.assertIs(app.model, before)
+        self.assertEqual(asked[0][0], "Editor update needed")
+        self.assertIn("newer editor version", app.msg_lbl.cget("text"))
+        self.assertIn(editor.RELEASES_URL, app.msg_lbl.cget("text"))
+        app.hide_message()
+
 
 if __name__ == "__main__":
     unittest.main()
