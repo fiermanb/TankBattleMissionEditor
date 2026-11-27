@@ -277,7 +277,7 @@ class PlayerTanksTest(unittest.TestCase):
         mgr.create(src, "Tank Choice", "x")
         entry = mgr.custom[0]
         tanks = mgr.player_tanks(entry)
-        self.assertEqual(len(tanks), 19, "every player tank has a button on the briefing screen")
+        self.assertEqual(len(tanks), 23, "every player tank has a button on the briefing screen")
         props = sorted(t["prop"] for t in tanks)
         choice = {p: (i % 3 != 0, i % 2 == 0) for i, p in enumerate(props)}
         with self.assertRaises(ValueError):

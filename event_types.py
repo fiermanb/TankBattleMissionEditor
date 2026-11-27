@@ -73,7 +73,6 @@ AI_FIELDS = [
     ("New_Attack_Distance", "Attack distance", "float", "m", ""),
     ("New_OpenFire_Distance", "Open fire distance", "float", "m", "Distance from which the tank fires"),
     ("New_Lost_Count", "Lost count", "float", "s", "Time before a lost enemy is given up"),
-    ("New_Dead_Angle", "Dead angle", "float", "deg", ""),
     ("New_Extended_Visibility", "Extra visibility", "float", "m", ""),
     ("New_Max_Lead_Multiplier", "Max lead multiplier", "float", "", "Aiming ahead of moving targets"),
     ("New_Is_Mission_Target", "Mission target", "bool", "", "Counts as a mission target"),

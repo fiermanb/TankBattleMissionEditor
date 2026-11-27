@@ -9,6 +9,7 @@ Run: python -m unittest discover tests
 
 import os
 import sys
+import tempfile
 import tkinter as tk
 import unittest
 
@@ -16,8 +17,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import editor  # noqa: E402
+import settings  # noqa: E402
 
 from gamepath import GAME  # noqa: E402
+from test_scenarios import mirror_game, remove_tree  # noqa: E402
 SCENE = 18
 
 
@@ -37,14 +40,23 @@ class Click:
 class ToolTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        """The editor runs on a mirror of the game with its own backup folder,
+        so the state of the real installation (for example custom scenarios
+        removed by a game update) cannot open start-up dialogs."""
+        cls.tmp = tempfile.mkdtemp(dir=os.path.dirname(GAME))
+        cls.game = os.path.join(cls.tmp, "game")
+        os.makedirs(cls.game)
+        mirror_game(cls.game)
         cls.root = tk.Tk()
         cls.root.withdraw()
-        cls.app = editor.EditorApp(cls.root, GAME, SCENE, auto_library=False)
+        cls.app = editor.EditorApp(cls.root, cls.game, SCENE, auto_library=False)
         cls.root.update()
 
     @classmethod
     def tearDownClass(cls):
         cls.root.destroy()
+        remove_tree(settings.backup_dir_for(cls.game))
+        remove_tree(cls.tmp)
 
     def state(self):
         self.root.update()

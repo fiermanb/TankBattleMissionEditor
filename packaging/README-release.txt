@@ -22,7 +22,7 @@ WHAT IT DOES
 - Tank settings: type, side, AI behaviour, respawns, unit group, follow target,
   patrol target, hearing the player's gunfire.
 - Mission settings (nothing selected): lighting (day, dusk or night for
-  custom scenarios), fog, visibility, recon plane.
+  custom scenarios), fog, visibility, recon plane, AI detection level.
 - Events: Properties show only the fields of the event's type and trigger.
 - Objects pane: new tanks, routes, waypoints, events, trigger areas and
   objects from any mission. Click an item to choose the Add tool for it, then

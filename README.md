@@ -13,11 +13,10 @@ https://store.steampowered.com/app/5086560/Tank_Battle_Classic/
 
 ## Start
 
-Unzip the release into a folder of your own and run `TankBattleMissionEditor.exe`
-(or `python editor.py` from source, see Build). The editor finds the game in your
-Steam libraries or asks for its folder (File > Select game folder). Double-click
-a mission in the Catalog. **Close the game before saving**; restart it to see
-changes.
+Unzip the release into a folder of your own and run `TankBattleMissionEditor.exe`.
+The editor finds the game in your Steam libraries or asks for its folder
+(File > Select game folder). Double-click a mission in the Catalog. **Close the
+game before saving**; restart it to see changes.
 
 ## What it does
 
@@ -83,7 +82,7 @@ switched-off objects of the mission a scenario was made from, are left out.
 ## Included scenarios
 
 Two scenarios made with the editor come with it (`Scenarios` folder of the
-release, `scenarios/` in the source). Install them with Scenario > Import
+release). Install them with Scenario > Import
 scenario; they appear on the Custom Missions page.
 
 - **Kursk - Deep Defense**: July 1943. Hold three trench lines with a T-34
@@ -105,17 +104,8 @@ Both offer every tank of the game as the player's tank.
   mountain areas AI routes can differ.
 - Event messages longer than 45 characters can be cut off in the game.
 - The briefing screen lists at most 9 unit groups.
-- After a game update, objects whose scripts changed cannot be edited until a
-  new version of the editor is released.
-
-## Build
-
-Requires Python 3.11+ on Windows.
-
-    pip install -r requirements.txt
-    python editor.py                      # run from source
-    python -m unittest discover tests     # tests (need the installed game)
-    python packaging/build_exe.py         # standalone executable + release zip
+- After a game update, missions that use game data changed by the update cannot
+  be opened until a new version of the editor is released.
 
 ## Licence
 

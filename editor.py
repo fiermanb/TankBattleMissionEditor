@@ -166,7 +166,6 @@ SPAWN_FIELDS = [
     ("Approach distance", "Approach_Distance", "float"),
     ("Open fire distance", "OpenFire_Distance", "float"),
     ("Lost count", "Lost_Count", "float"),
-    ("Dead angle", "Dead_Angle", "float"),
     ("Extra visibility", "Extended_Visibility", "float"),
     ("Max lead multiplier", "Max_Lead_Multiplier", "float"),
     ("Patrol speed rate", "Patrol_Speed_Rate", "float"),
@@ -196,6 +195,7 @@ MISSION_FIELDS = [
     ("MonoBehaviour", "Lighting_Control_CS", "Visibility (m)", "Current_Visibility", "float"),
     ("MonoBehaviour", "Lighting_Control_CS", "Dust particles", "Dust_Particle_Multiplier", "float"),
     ("MonoBehaviour", "Game_Controller_CS", "Recon plane available", "Available_Recon_Plane", "bool"),
+    ("MonoBehaviour", "Game_Controller_CS", "AI detection level", "AI_Detection_Level", "int"),
     ("MonoBehaviour", "Score_Manager_CS", "Assist score", "Enable_Assist_Score", "bool"),
 ]
 
@@ -1429,8 +1429,18 @@ class EditorApp:
             "it comes with ABSOLUTELY NO WARRANTY.\n"
             "Not affiliated with or endorsed by the game's developer or publisher.\n\n"
             f"Game folder: {game}\n"
-            f"Script layouts: {self.ctx.layout_status() if self.ctx else '-'}\n"
+            f"Game version: {self.game_version_note()}\n"
             f"Settings and backups: {settings.DATA_DIR}"), parent=self.root)
+
+    def game_version_note(self):
+        """Whether this editor version supports the installed game version, in
+        the user's terms (Help > About)."""
+        if not self.ctx:
+            return "-"
+        if not self.ctx.verify_layouts:
+            return "supported by this editor version"
+        return ("updated after this editor version was released; missions that use changed game data "
+                "cannot be opened until you install a newer editor version")
 
     # ---- layout ------------------------------------------------------
 
@@ -3611,7 +3621,7 @@ class EditorApp:
         if idx is not None and self.guard_unsaved():
             self.open_scene(idx)
 
-    def editor_update_needed(self, error):
+    def editor_update_needed(self):
         """Explain that the game was updated after this editor version and
         offer the download page."""
         if messagebox.askyesno(
@@ -3622,7 +3632,6 @@ class EditorApp:
                 "Your game and your missions are not affected. Install the newest editor version: unzip it "
                 "over this one; your scenarios, backups and settings stay. If there is no newer version yet, "
                 "it follows soon after a game update.\n\n"
-                f"Details: {error}\n\n"
                 "Open the download page now?", icon="warning", parent=self.root):
             webbrowser.open(RELEASES_URL)
 
@@ -3630,11 +3639,11 @@ class EditorApp:
         self.busy(f"Loading level{index} ({self.ctx.scene_label(index)})...")
         try:
             self.model = SceneModel(self.ctx, index)
-        except LayoutMismatch as e:
+        except LayoutMismatch:
             self.idle()
             self.status(f"Cannot open level{index}: the game update changed data this mission uses. "
                         f"Install a newer editor version: {RELEASES_URL}", "warn", banner=True)
-            self.editor_update_needed(e)
+            self.editor_update_needed()
             return
         except Exception as e:
             self.idle()
@@ -6192,6 +6201,9 @@ class EditorApp:
             elif kind == "float":
                 self.prop_entry(title, f"{val:g}", lambda s, p=pid, k=key: self.op(f"Set {k}", m.set_field, p, k,
                                                                                 float(s)), tip=tip)
+            elif kind == "int":
+                self.prop_entry(title, str(val), lambda s, p=pid, k=key: self.op(f"Set {k}", m.set_field, p, k,
+                                                                               int(s)), tip=tip)
             elif kind == "colour":
                 self.prop_colour(title, _rgb_of(val), lambda rgb, p=pid, k=key, a=val.get("a", 1.0): self.op(
                     f"Set {k}", m.set_field, p, k, {"r": rgb[0], "g": rgb[1], "b": rgb[2], "a": a}),
